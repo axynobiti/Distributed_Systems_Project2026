@@ -1,0 +1,4 @@
+authentication-service/venv/
+authentication-service/.auth_token
+__pycache__/
+*.pyc
