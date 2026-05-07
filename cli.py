@@ -4,7 +4,7 @@ import requests
 
 # Base URL of the authentication service.
 # For local testing, the FastAPI service runs on localhost port 8000.
-AUTH_SERVICE_URL = "http://127.0.0.1:8000"
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
 
 # Local file used to store the current user's JWT token.
 # This CLI supports one active logged-in user at a time.

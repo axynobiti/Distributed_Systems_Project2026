@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -8,9 +10,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # password: auth_password
 # host: localhost
 #
-# For Docker/Kubernetes deployment, this should come from
-# an environment variable instead of being hardcoded.
-DATABASE_URL = "postgresql://auth_user:auth_password@localhost/auth_db"
+# Docker/Kubernetes provides DATABASE_URL through the auth deployment.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://auth_user:auth_password@localhost/auth_db"
+)
 
 # SQLAlchemy engine.
 # The engine manages the connection pool and communicates with PostgreSQL.
