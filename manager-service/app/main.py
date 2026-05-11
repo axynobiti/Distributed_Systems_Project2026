@@ -1,7 +1,7 @@
 from datetime import datetime
 import os
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from minio import Minio
 from minio.error import S3Error
@@ -11,6 +11,27 @@ import requests
 
 from app.database import engine, get_db
 from app.models import Base, Job, Task, TaskAttempt
+
+
+def get_positive_int_env(name: str, default: int):
+    """
+    Read a positive integer from the environment.
+
+    If the value is missing or invalid, keep the safe local default.
+    """
+
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    try:
+        parsed_value = int(value)
+    except ValueError:
+        return default
+
+    return max(1, parsed_value)
+
 
 # Create the FastAPI application.
 app = FastAPI(title="Manager Service")
@@ -37,6 +58,14 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "mapreduce")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+
+# Manager-controlled task sizing.
+# Users submit files; the Manager decides how many map/reduce tasks to create.
+MAP_CHUNK_SIZE_BYTES = get_positive_int_env(
+    "MAP_CHUNK_SIZE_BYTES",
+    5 * 1024 * 1024
+)
+DEFAULT_NUM_REDUCERS = get_positive_int_env("DEFAULT_NUM_REDUCERS", 1)
 
 minio_client = Minio(
     MINIO_ENDPOINT,
@@ -267,6 +296,36 @@ def cleanup_minio_objects(object_names):
             pass
         except Exception:
             pass
+
+
+def get_uploaded_file_size(uploaded_file: UploadFile):
+    """
+    Return uploaded file size in bytes without consuming the file stream.
+    """
+
+    uploaded_file.file.seek(0, os.SEEK_END)
+    file_size = uploaded_file.file.tell()
+    uploaded_file.file.seek(0)
+
+    return file_size
+
+
+def calculate_mapper_count(input_size_bytes: int):
+    """
+    Choose the number of map tasks from the input file size.
+    """
+
+    full_chunks, has_remainder = divmod(
+        input_size_bytes,
+        MAP_CHUNK_SIZE_BYTES
+    )
+
+    mapper_count = full_chunks
+
+    if has_remainder:
+        mapper_count += 1
+
+    return max(1, mapper_count)
 
 
 def serialize_task(task: Task):
@@ -505,8 +564,6 @@ def submit_job(
     input_file: UploadFile = File(...),
     mapper_file: UploadFile = File(...),
     reducer_file: UploadFile = File(...),
-    num_mappers: int = Form(1, ge=1),
-    num_reducers: int = Form(1, ge=1),
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
@@ -519,6 +576,10 @@ def submit_job(
     """
 
     user_info = validate_token(credentials)
+    input_size_bytes = get_uploaded_file_size(input_file)
+    manager_num_mappers = calculate_mapper_count(input_size_bytes)
+    manager_num_reducers = DEFAULT_NUM_REDUCERS
+
     uploaded_objects = []
     map_tasks = []
 
@@ -528,8 +589,8 @@ def submit_job(
         input_file="pending-upload",
         mapper_file="pending-upload",
         reducer_file="pending-upload",
-        num_mappers=num_mappers,
-        num_reducers=num_reducers,
+        num_mappers=manager_num_mappers,
+        num_reducers=manager_num_reducers,
         status="pending",
         result=None
     )
@@ -571,7 +632,7 @@ def submit_job(
 
         map_tasks = [
             build_map_task(new_job, task_index)
-            for task_index in range(num_mappers)
+            for task_index in range(manager_num_mappers)
         ]
 
         db.add_all(map_tasks)
@@ -590,6 +651,10 @@ def submit_job(
         "success": True,
         "job_id": new_job.job_id,
         "status": new_job.status,
+        "input_size_bytes": input_size_bytes,
+        "map_chunk_size_bytes": MAP_CHUNK_SIZE_BYTES,
+        "num_mappers": new_job.num_mappers,
+        "num_reducers": new_job.num_reducers,
         "map_tasks_created": len(map_tasks),
         "task_progress": summarize_tasks(map_tasks)
     }

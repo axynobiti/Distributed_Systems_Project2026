@@ -68,6 +68,8 @@ export MINIO_ACCESS_KEY="minioadmin"
 export MINIO_SECRET_KEY="minioadmin"
 export MINIO_BUCKET="mapreduce"
 export MINIO_SECURE="false"
+export MAP_CHUNK_SIZE_BYTES="5242880"
+export DEFAULT_NUM_REDUCERS="1"
 ```
 
 Job and task tables are created automatically during local development through
@@ -81,9 +83,10 @@ SQLAlchemy's `Base.metadata.create_all(...)`.
 input_file=<uploaded dataset>
 mapper_file=<uploaded mapper code>
 reducer_file=<uploaded reducer code>
-num_mappers=1
-num_reducers=1
 ```
 
 The Manager uploads the submitted files to MinIO and stores their MinIO paths
-in PostgreSQL before creating the initial map task metadata.
+in PostgreSQL before creating the initial map task metadata. The user does not
+choose the number of mappers or reducers. The Manager chooses the number of map
+tasks from the uploaded input size and `MAP_CHUNK_SIZE_BYTES`, and uses
+`DEFAULT_NUM_REDUCERS` for the reducer count.
