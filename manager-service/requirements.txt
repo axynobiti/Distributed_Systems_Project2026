@@ -1,4 +1,5 @@
 fastapi
+kubernetes
 minio
 python-multipart
 uvicorn[standard]

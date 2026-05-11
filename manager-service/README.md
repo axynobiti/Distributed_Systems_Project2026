@@ -70,6 +70,13 @@ export MINIO_BUCKET="mapreduce"
 export MINIO_SECURE="false"
 export MAP_CHUNK_SIZE_BYTES="5242880"
 export DEFAULT_NUM_REDUCERS="1"
+export KUBERNETES_SCHEDULING_ENABLED="false"
+export KUBERNETES_NAMESPACE="default"
+export WORKER_IMAGE="mapreduce-worker:latest"
+export WORKER_IMAGE_PULL_POLICY="IfNotPresent"
+export MANAGER_INTERNAL_URL="http://manager:8001"
+export WORKER_SERVICE_TOKEN=""
+export KUBERNETES_JOB_TTL_SECONDS="3600"
 ```
 
 Job and task tables are created automatically during local development through
@@ -96,3 +103,33 @@ mappers or reducers. The Manager creates one map task per input chunk and uses
 `GET /jobs/{job_id}/result` is available only after a job reaches `completed`.
 It lists final result objects from MinIO under the job output prefix, returning
 their object names, `s3://...` paths, sizes, etags, and last-modified times.
+
+## Kubernetes Scheduling
+
+Kubernetes scheduling is disabled by default for local development. Set
+`KUBERNETES_SCHEDULING_ENABLED=true` when the Manager is running in Minikube or
+another Kubernetes environment with access to the Kubernetes API.
+
+When enabled, the Manager creates one Kubernetes Job for each map task after job
+submission. Each worker Job receives environment variables describing exactly one
+task:
+
+```text
+TASK_TYPE
+JOB_ID
+TASK_ID
+TASK_INDEX
+INPUT_PATH
+USER_CODE_PATH
+OUTPUT_PATH
+MINIO_ENDPOINT
+MINIO_BUCKET
+MINIO_ACCESS_KEY
+MINIO_SECRET_KEY
+MINIO_SECURE
+MANAGER_URL
+WORKER_SERVICE_TOKEN
+```
+
+The worker image is configured with `WORKER_IMAGE`. The Manager stores the
+created Kubernetes Job name in each task row as `kubernetes_job_name`.

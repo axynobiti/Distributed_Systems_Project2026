@@ -1,17 +1,28 @@
 from datetime import datetime
 from io import BytesIO
 import os
+import re
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from minio import Minio
-from minio.error import S3Error
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import requests
 
 from app.database import engine, get_db
 from app.models import Base, Job, Task, TaskAttempt
+
+try:
+    from kubernetes import client as kubernetes_client
+    from kubernetes import config as kubernetes_config
+    from kubernetes.client.rest import ApiException
+except ImportError:
+    kubernetes_client = None
+    kubernetes_config = None
+    ApiException = Exception
+
+from minio import Minio
+from minio.error import S3Error
 
 
 def get_positive_int_env(name: str, default: int):
@@ -32,6 +43,19 @@ def get_positive_int_env(name: str, default: int):
         return default
 
     return max(1, parsed_value)
+
+
+def get_bool_env(name: str, default: bool = False):
+    """
+    Read a boolean from the environment.
+    """
+
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    return value.lower() in ["1", "true", "yes", "on"]
 
 
 # Create the FastAPI application.
@@ -67,6 +91,23 @@ MAP_CHUNK_SIZE_BYTES = get_positive_int_env(
     5 * 1024 * 1024
 )
 DEFAULT_NUM_REDUCERS = get_positive_int_env("DEFAULT_NUM_REDUCERS", 1)
+
+# Kubernetes worker scheduling configuration.
+KUBERNETES_SCHEDULING_ENABLED = get_bool_env(
+    "KUBERNETES_SCHEDULING_ENABLED",
+    False
+)
+KUBERNETES_NAMESPACE = os.getenv("KUBERNETES_NAMESPACE", "default")
+WORKER_IMAGE = os.getenv("WORKER_IMAGE", "mapreduce-worker:latest")
+WORKER_IMAGE_PULL_POLICY = os.getenv("WORKER_IMAGE_PULL_POLICY", "IfNotPresent")
+MANAGER_INTERNAL_URL = os.getenv("MANAGER_INTERNAL_URL", "http://manager:8001")
+WORKER_SERVICE_TOKEN = os.getenv("WORKER_SERVICE_TOKEN", "")
+KUBERNETES_JOB_TTL_SECONDS = get_positive_int_env(
+    "KUBERNETES_JOB_TTL_SECONDS",
+    3600
+)
+
+kubernetes_batch_api = None
 
 minio_client = Minio(
     MINIO_ENDPOINT,
@@ -606,6 +647,208 @@ def build_reduce_task(job: Job, task_index: int):
     )
 
 
+def sanitize_kubernetes_name(value: str):
+    """
+    Convert a value into a Kubernetes-safe object name.
+    """
+
+    sanitized = re.sub(r"[^a-z0-9-]", "-", value.lower())
+    sanitized = sanitized.strip("-")
+
+    return sanitized or "task"
+
+
+def build_kubernetes_job_name(task: Task):
+    """
+    Build a stable Kubernetes Job name for one task attempt.
+    """
+
+    next_attempt_number = task.attempt_count + 1
+    raw_name = (
+        f"mr-{task.task_type}-{task.job_id}-"
+        f"{task.task_index:05d}-attempt-{next_attempt_number:03d}"
+    )
+
+    return sanitize_kubernetes_name(raw_name)[:63].rstrip("-")
+
+
+def get_kubernetes_batch_api():
+    """
+    Return a Kubernetes BatchV1Api client.
+
+    In a cluster, the Manager should use the pod service account. During local
+    Minikube development, it can fall back to the user's kubeconfig.
+    """
+
+    global kubernetes_batch_api
+
+    if kubernetes_batch_api is not None:
+        return kubernetes_batch_api
+
+    if kubernetes_client is None or kubernetes_config is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Kubernetes client library is not installed"
+        )
+
+    try:
+        kubernetes_config.load_incluster_config()
+    except Exception:
+        try:
+            kubernetes_config.load_kube_config()
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="Kubernetes configuration is unavailable"
+            )
+
+    kubernetes_batch_api = kubernetes_client.BatchV1Api()
+
+    return kubernetes_batch_api
+
+
+def build_worker_env(job: Job, task: Task):
+    """
+    Build environment variables passed to one worker pod.
+    """
+
+    user_code_path = job.mapper_file
+
+    if task.task_type == "reduce":
+        user_code_path = job.reducer_file
+
+    env_values = {
+        "TASK_TYPE": task.task_type,
+        "JOB_ID": str(job.job_id),
+        "TASK_ID": str(task.task_id),
+        "TASK_INDEX": str(task.task_index),
+        "INPUT_PATH": task.input_path,
+        "USER_CODE_PATH": user_code_path,
+        "OUTPUT_PATH": task.output_path or "",
+        "MINIO_ENDPOINT": MINIO_ENDPOINT,
+        "MINIO_BUCKET": MINIO_BUCKET,
+        "MINIO_ACCESS_KEY": MINIO_ACCESS_KEY,
+        "MINIO_SECRET_KEY": MINIO_SECRET_KEY,
+        "MINIO_SECURE": str(MINIO_SECURE).lower(),
+        "MANAGER_URL": MANAGER_INTERNAL_URL,
+        "WORKER_SERVICE_TOKEN": WORKER_SERVICE_TOKEN
+    }
+
+    return [
+        kubernetes_client.V1EnvVar(name=name, value=value)
+        for name, value in env_values.items()
+    ]
+
+
+def create_kubernetes_job_for_task(job: Job, task: Task):
+    """
+    Create one Kubernetes Job that runs one map/reduce task.
+    """
+
+    batch_api = get_kubernetes_batch_api()
+    kubernetes_job_name = build_kubernetes_job_name(task)
+
+    labels = {
+        "app": "mapreduce-worker",
+        "mapreduce-job-id": str(job.job_id),
+        "mapreduce-task-id": str(task.task_id),
+        "mapreduce-task-type": task.task_type
+    }
+
+    container = kubernetes_client.V1Container(
+        name="worker",
+        image=WORKER_IMAGE,
+        image_pull_policy=WORKER_IMAGE_PULL_POLICY,
+        env=build_worker_env(job, task)
+    )
+
+    pod_template = kubernetes_client.V1PodTemplateSpec(
+        metadata=kubernetes_client.V1ObjectMeta(labels=labels),
+        spec=kubernetes_client.V1PodSpec(
+            restart_policy="Never",
+            containers=[container]
+        )
+    )
+
+    kubernetes_job = kubernetes_client.V1Job(
+        api_version="batch/v1",
+        kind="Job",
+        metadata=kubernetes_client.V1ObjectMeta(
+            name=kubernetes_job_name,
+            namespace=KUBERNETES_NAMESPACE,
+            labels=labels
+        ),
+        spec=kubernetes_client.V1JobSpec(
+            template=pod_template,
+            backoff_limit=0,
+            ttl_seconds_after_finished=KUBERNETES_JOB_TTL_SECONDS
+        )
+    )
+
+    try:
+        batch_api.create_namespaced_job(
+            namespace=KUBERNETES_NAMESPACE,
+            body=kubernetes_job
+        )
+    except ApiException as exc:
+        if getattr(exc, "status", None) != 409:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not create Kubernetes Job for task {task.task_id}"
+            )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not create Kubernetes Job for task {task.task_id}"
+        )
+
+    task.kubernetes_job_name = kubernetes_job_name
+
+    return kubernetes_job_name
+
+
+def cleanup_kubernetes_jobs(kubernetes_job_names):
+    """
+    Best-effort cleanup for worker Jobs when submission fails.
+    """
+
+    if not kubernetes_job_names:
+        return
+
+    try:
+        batch_api = get_kubernetes_batch_api()
+    except HTTPException:
+        return
+
+    for kubernetes_job_name in kubernetes_job_names:
+        try:
+            batch_api.delete_namespaced_job(
+                name=kubernetes_job_name,
+                namespace=KUBERNETES_NAMESPACE,
+                propagation_policy="Background"
+            )
+        except Exception:
+            pass
+
+
+def schedule_tasks_if_enabled(job: Job, tasks, scheduled_job_names=None):
+    """
+    Create Kubernetes Jobs for tasks when scheduling is enabled.
+    """
+
+    if scheduled_job_names is None:
+        scheduled_job_names = []
+
+    if not KUBERNETES_SCHEDULING_ENABLED:
+        return scheduled_job_names
+
+    for task in tasks:
+        scheduled_job_name = create_kubernetes_job_for_task(job, task)
+        scheduled_job_names.append(scheduled_job_name)
+
+    return scheduled_job_names
+
+
 def get_latest_attempt(db: Session, task: Task):
     """
     Return the most recent attempt for a task, if one exists.
@@ -724,6 +967,7 @@ def submit_job(
     manager_num_reducers = DEFAULT_NUM_REDUCERS
 
     uploaded_objects = []
+    scheduled_kubernetes_jobs = []
     map_tasks = []
 
     new_job = Job(
@@ -788,14 +1032,24 @@ def submit_job(
         ]
 
         db.add_all(map_tasks)
+        db.flush()
+
+        scheduled_kubernetes_jobs = schedule_tasks_if_enabled(
+            new_job,
+            map_tasks,
+            scheduled_kubernetes_jobs
+        )
+
         db.commit()
         db.refresh(new_job)
     except HTTPException:
         db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
         cleanup_minio_objects(uploaded_objects)
         raise
     except Exception:
         db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
         cleanup_minio_objects(uploaded_objects)
         raise
 
@@ -808,6 +1062,8 @@ def submit_job(
         "num_mappers": new_job.num_mappers,
         "num_reducers": new_job.num_reducers,
         "map_tasks_created": len(map_tasks),
+        "kubernetes_scheduling_enabled": KUBERNETES_SCHEDULING_ENABLED,
+        "kubernetes_jobs_created": scheduled_kubernetes_jobs,
         "task_progress": summarize_tasks(map_tasks)
     }
 
