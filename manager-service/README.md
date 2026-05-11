@@ -85,8 +85,8 @@ mapper_file=<uploaded mapper code>
 reducer_file=<uploaded reducer code>
 ```
 
-The Manager uploads the submitted files to MinIO and stores their MinIO paths
-in PostgreSQL before creating the initial map task metadata. The user does not
-choose the number of mappers or reducers. The Manager chooses the number of map
-tasks from the uploaded input size and `MAP_CHUNK_SIZE_BYTES`, and uses
+The Manager uploads the submitted files to MinIO, splits the input into
+line-based chunk objects, and stores the MinIO paths in PostgreSQL before
+creating the initial map task metadata. The user does not choose the number of
+mappers or reducers. The Manager creates one map task per input chunk and uses
 `DEFAULT_NUM_REDUCERS` for the reducer count.
