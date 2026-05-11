@@ -254,6 +254,67 @@ def minio_uri(object_name: str):
     return f"s3://{MINIO_BUCKET}/{object_name}"
 
 
+def get_job_output_prefix(job: Job):
+    """
+    Return the MinIO object prefix where a job's final output is stored.
+
+    job.output_path may be stored either as a raw object prefix or as an
+    s3://bucket/prefix URI. This helper normalizes both forms into a MinIO
+    object prefix.
+    """
+
+    if job.output_path:
+        bucket_uri_prefix = f"s3://{MINIO_BUCKET}/"
+
+        if job.output_path.startswith(bucket_uri_prefix):
+            object_prefix = job.output_path[len(bucket_uri_prefix):]
+        else:
+            object_prefix = job.output_path
+
+        return f"{object_prefix.strip('/')}/"
+
+    return f"jobs/{job.job_id}/output/"
+
+
+def serialize_minio_object(minio_object):
+    """
+    Convert a MinIO object summary into a JSON-friendly dictionary.
+    """
+
+    return {
+        "object_name": minio_object.object_name,
+        "path": minio_uri(minio_object.object_name),
+        "size": minio_object.size,
+        "etag": minio_object.etag,
+        "last_modified": minio_object.last_modified
+    }
+
+
+def list_minio_objects(prefix: str):
+    """
+    List MinIO objects under a prefix.
+    """
+
+    try:
+        return list(
+            minio_client.list_objects(
+                MINIO_BUCKET,
+                prefix=prefix,
+                recursive=True
+            )
+        )
+    except S3Error:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not list result objects from MinIO"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not list result objects from MinIO"
+        )
+
+
 def upload_job_file(job_id: int, uploaded_file: UploadFile, kind: str):
     """
     Upload one submitted file to MinIO and return its DDS storage path.
