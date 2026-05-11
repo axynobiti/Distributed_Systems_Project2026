@@ -1164,24 +1164,12 @@ def retrieve_job_result(
     Retrieve the result of a completed job.
 
     The Manager validates the token, checks job ownership, checks that the
-    job is completed, and then returns the result.
+    job is completed, and then returns final output objects from MinIO.
     """
 
     user_info = validate_token(credentials)
-
-    job = db.query(Job).filter(Job.job_id == job_id).first()
-
-    if not job:
-        raise HTTPException(
-            status_code=404,
-            detail="Job not found"
-        )
-
-    if user_info["role"] != "admin" and job.username != user_info["username"]:
-        raise HTTPException(
-            status_code=403,
-            detail="You are not allowed to retrieve this job result"
-        )
+    job = get_job_or_404(db, job_id)
+    ensure_job_access(user_info, job, "retrieve")
 
     if job.status != "completed":
         raise HTTPException(
@@ -1189,10 +1177,28 @@ def retrieve_job_result(
             detail="Result is not available yet"
         )
 
+    output_prefix = get_job_output_prefix(job)
+    result_objects = list_minio_objects(output_prefix)
+
+    if not result_objects:
+        raise HTTPException(
+            status_code=404,
+            detail="Result objects were not found in MinIO"
+        )
+
     return {
         "job_id": job.job_id,
-        "result": job.result,
-        "output_path": job.output_path
+        "status": job.status,
+        "output_prefix": output_prefix,
+        "output_path": job.output_path,
+        "result_object_count": len(result_objects),
+        "result_objects": [
+            serialize_minio_object(minio_object)
+            for minio_object in sorted(
+                result_objects,
+                key=lambda item: item.object_name
+            )
+        ]
     }
 
 

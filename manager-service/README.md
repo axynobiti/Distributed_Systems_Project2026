@@ -90,3 +90,9 @@ line-based chunk objects, and stores the MinIO paths in PostgreSQL before
 creating the initial map task metadata. The user does not choose the number of
 mappers or reducers. The Manager creates one map task per input chunk and uses
 `DEFAULT_NUM_REDUCERS` for the reducer count.
+
+## Result Retrieval
+
+`GET /jobs/{job_id}/result` is available only after a job reaches `completed`.
+It lists final result objects from MinIO under the job output prefix, returning
+their object names, `s3://...` paths, sizes, etags, and last-modified times.
