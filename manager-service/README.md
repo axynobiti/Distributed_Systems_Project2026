@@ -62,6 +62,7 @@ You can override service configuration with environment variables:
 ```bash
 export DATABASE_URL="postgresql://manager_user:manager_password@localhost/manager_db"
 export AUTH_SERVICE_URL="http://127.0.0.1:8000"
+export AUTH_REQUEST_TIMEOUT_SECONDS="5"
 export MANAGER_ID="manager-local"
 export MINIO_ENDPOINT="127.0.0.1:9000"
 export MINIO_ACCESS_KEY="minioadmin"

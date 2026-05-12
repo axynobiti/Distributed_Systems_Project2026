@@ -72,6 +72,10 @@ Base.metadata.create_all(bind=engine)
 # Authentication Service URL.
 # The Manager Service uses this to validate JWT tokens.
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
+AUTH_REQUEST_TIMEOUT_SECONDS = get_positive_int_env(
+    "AUTH_REQUEST_TIMEOUT_SECONDS",
+    5
+)
 
 # Identifier of this Manager replica.
 # In Kubernetes, HOSTNAME is usually the pod name. MANAGER_ID can override it.
@@ -186,19 +190,37 @@ def validate_token(credentials: HTTPAuthorizationCredentials):
 
     token = credentials.credentials
 
-    response = requests.post(
-        f"{AUTH_SERVICE_URL}/auth/validate-token",
-        json={
-            "token": token
-        }
-    )
-
-    result = response.json()
+    try:
+        response = requests.post(
+            f"{AUTH_SERVICE_URL}/auth/validate-token",
+            json={
+                "token": token
+            },
+            timeout=AUTH_REQUEST_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication Service unavailable"
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail="Authentication Service returned invalid JSON"
+        )
 
     if not result.get("valid"):
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token"
+        )
+
+    if "username" not in result or "role" not in result:
+        raise HTTPException(
+            status_code=502,
+            detail="Authentication Service response missing username or role"
         )
 
     return result
