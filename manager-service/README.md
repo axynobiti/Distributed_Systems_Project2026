@@ -79,6 +79,8 @@ export WORKER_IMAGE_PULL_POLICY="IfNotPresent"
 export MANAGER_INTERNAL_URL="http://manager:8001"
 export WORKER_SERVICE_TOKEN=""
 export KUBERNETES_JOB_TTL_SECONDS="3600"
+export KUBERNETES_RECONCILE_ENABLED="false"
+export KUBERNETES_RECONCILE_INTERVAL_SECONDS="15"
 ```
 
 Job and task tables are created automatically during local development through
@@ -161,3 +163,16 @@ WORKER_SERVICE_TOKEN
 
 The worker image is configured with `WORKER_IMAGE`. The Manager stores the
 created Kubernetes Job name in each task row as `kubernetes_job_name`.
+
+## Kubernetes Monitoring
+
+Set `KUBERNETES_RECONCILE_ENABLED=true` to start a background Manager loop that
+polls Kubernetes Job status every `KUBERNETES_RECONCILE_INTERVAL_SECONDS`.
+
+The reconciler keeps PostgreSQL task metadata aligned with Kubernetes:
+
+- active Jobs move tasks to `running`
+- completed Jobs move tasks to `completed`
+- failed or missing Jobs record a failed attempt
+- failed tasks with retries left are rescheduled as new Kubernetes Jobs
+- completed map phase triggers shuffle and reduce Job scheduling

@@ -4,6 +4,8 @@ from io import BytesIO
 import json
 import os
 import re
+import threading
+import time
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import requests
 
-from app.database import engine, get_db
+from app.database import SessionLocal, engine, get_db
 from app.models import Base, Job, Task, TaskAttempt
 
 try:
@@ -112,6 +114,14 @@ WORKER_SERVICE_TOKEN = os.getenv("WORKER_SERVICE_TOKEN", "")
 KUBERNETES_JOB_TTL_SECONDS = get_positive_int_env(
     "KUBERNETES_JOB_TTL_SECONDS",
     3600
+)
+KUBERNETES_RECONCILE_ENABLED = get_bool_env(
+    "KUBERNETES_RECONCILE_ENABLED",
+    False
+)
+KUBERNETES_RECONCILE_INTERVAL_SECONDS = get_positive_int_env(
+    "KUBERNETES_RECONCILE_INTERVAL_SECONDS",
+    15
 )
 
 kubernetes_batch_api = None
@@ -1052,6 +1062,143 @@ def get_latest_attempt(db: Session, task: Task):
     ).first()
 
 
+def mark_task_running(
+    db: Session,
+    task: Task,
+    kubernetes_job_name: str | None = None,
+    kubernetes_pod_name: str | None = None
+):
+    """
+    Move a task to running and ensure the current attempt row exists.
+
+    This is shared by the worker callback endpoint and the Kubernetes
+    reconciler. If the task is already running, the call is idempotent.
+    """
+
+    if task.status not in ["pending", "running"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task cannot be marked running from status {task.status}"
+        )
+
+    if task.status == "pending":
+        task.attempt_count += 1
+        task.status = "running"
+        task.started_at = now_utc()
+        task.completed_at = None
+        task.error_message = None
+    elif task.attempt_count == 0:
+        task.attempt_count = 1
+
+    if kubernetes_job_name:
+        task.kubernetes_job_name = kubernetes_job_name
+
+    attempt = get_latest_attempt(db, task)
+
+    if not attempt or attempt.attempt_number != task.attempt_count:
+        attempt = TaskAttempt(
+            task_id=task.task_id,
+            attempt_number=task.attempt_count,
+            status="running",
+            kubernetes_pod_name=kubernetes_pod_name
+        )
+        db.add(attempt)
+        db.flush()
+    else:
+        attempt.status = "running"
+
+        if kubernetes_pod_name:
+            attempt.kubernetes_pod_name = kubernetes_pod_name
+
+    return attempt
+
+
+def mark_task_completed_from_kubernetes(db: Session, job: Job, task: Task):
+    """
+    Mark a Kubernetes-backed task completed from observed Job status.
+    """
+
+    if task.status == "completed":
+        return []
+
+    if task.status == "pending":
+        attempt = mark_task_running(
+            db,
+            task,
+            kubernetes_job_name=task.kubernetes_job_name
+        )
+    else:
+        attempt = get_latest_attempt(db, task)
+
+    task.status = "completed"
+    task.completed_at = now_utc()
+    task.error_message = None
+
+    if attempt:
+        attempt.status = "completed"
+        attempt.completed_at = now_utc()
+        attempt.error_message = None
+
+    recalculate_job_status(db, job)
+
+    reduce_tasks_to_schedule = get_pending_unscheduled_tasks(
+        db,
+        job.job_id,
+        "reduce"
+    )
+
+    return schedule_tasks_if_enabled(job, reduce_tasks_to_schedule, [])
+
+
+def mark_task_failed_for_retry(
+    db: Session,
+    job: Job,
+    task: Task,
+    error_message: str
+):
+    """
+    Record a failed attempt and return whether the task should retry.
+    """
+
+    if task.status not in ["pending", "running"]:
+        return False
+
+    if task.status == "pending" or task.attempt_count == 0:
+        task.attempt_count += 1
+
+    attempt = get_latest_attempt(db, task)
+
+    if not attempt or attempt.attempt_number != task.attempt_count:
+        attempt = TaskAttempt(
+            task_id=task.task_id,
+            attempt_number=task.attempt_count,
+            status="failed"
+        )
+        db.add(attempt)
+        db.flush()
+    else:
+        attempt.status = "failed"
+
+    attempt.error_message = error_message
+    attempt.completed_at = now_utc()
+    task.error_message = error_message
+
+    if task.attempt_count <= task.max_retries:
+        task.status = "pending"
+        task.started_at = None
+        task.completed_at = None
+        task.kubernetes_job_name = None
+        will_retry = True
+    else:
+        task.status = "failed"
+        task.completed_at = now_utc()
+        will_retry = False
+
+    recalculate_job_status(db, job)
+
+    return will_retry
+
+
 def create_reduce_tasks_if_ready(db: Session, job: Job):
     """
     Create reduce tasks once all map tasks have completed.
@@ -1125,6 +1272,219 @@ def recalculate_job_status(db: Session, job: Job):
         return
 
     job.status = "pending"
+
+
+def kubernetes_condition_is_true(condition):
+    """
+    Return True when a Kubernetes condition is explicitly true.
+    """
+
+    return str(getattr(condition, "status", "")).lower() == "true"
+
+
+def kubernetes_job_succeeded(job_status):
+    """
+    Return True when Kubernetes reports a Job as complete.
+    """
+
+    if (getattr(job_status, "succeeded", 0) or 0) > 0:
+        return True
+
+    for condition in getattr(job_status, "conditions", None) or []:
+        if condition.type == "Complete" and kubernetes_condition_is_true(condition):
+            return True
+
+    return False
+
+
+def kubernetes_job_failed(job_status):
+    """
+    Return True when Kubernetes reports a Job as failed.
+    """
+
+    if (getattr(job_status, "failed", 0) or 0) > 0:
+        return True
+
+    for condition in getattr(job_status, "conditions", None) or []:
+        if condition.type == "Failed" and kubernetes_condition_is_true(condition):
+            return True
+
+    return False
+
+
+def describe_kubernetes_job_failure(job_status):
+    """
+    Pull a useful failure message from a Kubernetes Job status.
+    """
+
+    for condition in getattr(job_status, "conditions", None) or []:
+        if condition.type == "Failed" and kubernetes_condition_is_true(condition):
+            return (
+                condition.message
+                or condition.reason
+                or "Kubernetes Job failed"
+            )
+
+    return "Kubernetes Job failed"
+
+
+def read_kubernetes_job_status(kubernetes_job_name: str):
+    """
+    Read one Kubernetes Job status. Return None if the Job no longer exists.
+    """
+
+    batch_api = get_kubernetes_batch_api()
+
+    try:
+        kubernetes_job = batch_api.read_namespaced_job_status(
+            name=kubernetes_job_name,
+            namespace=KUBERNETES_NAMESPACE
+        )
+    except ApiException as exc:
+        if getattr(exc, "status", None) == 404:
+            return None
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not read Kubernetes Job {kubernetes_job_name}"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not read Kubernetes Job {kubernetes_job_name}"
+        )
+
+    return kubernetes_job.status
+
+
+def reconcile_kubernetes_task(db: Session, job: Job, task: Task):
+    """
+    Reconcile one DDS task row with its Kubernetes Job status.
+    """
+
+    if not task.kubernetes_job_name:
+        return []
+
+    if job.status in ["completed", "failed"]:
+        return []
+
+    if task.status not in ["pending", "running"]:
+        return []
+
+    job_status = read_kubernetes_job_status(task.kubernetes_job_name)
+
+    if job_status is None:
+        will_retry = mark_task_failed_for_retry(
+            db,
+            job,
+            task,
+            "Kubernetes Job disappeared before completion"
+        )
+
+        if will_retry:
+            return schedule_tasks_if_enabled(job, [task], [])
+
+        return []
+
+    if kubernetes_job_succeeded(job_status):
+        return mark_task_completed_from_kubernetes(db, job, task)
+
+    if kubernetes_job_failed(job_status):
+        will_retry = mark_task_failed_for_retry(
+            db,
+            job,
+            task,
+            describe_kubernetes_job_failure(job_status)
+        )
+
+        if will_retry:
+            return schedule_tasks_if_enabled(job, [task], [])
+
+        return []
+
+    if (getattr(job_status, "active", 0) or 0) > 0:
+        mark_task_running(
+            db,
+            task,
+            kubernetes_job_name=task.kubernetes_job_name
+        )
+        recalculate_job_status(db, job)
+
+    return []
+
+
+def reconcile_kubernetes_tasks_once():
+    """
+    Poll Kubernetes once and bring DDS task state up to date.
+    """
+
+    db = SessionLocal()
+
+    try:
+        tasks = db.query(Task).filter(
+            Task.kubernetes_job_name.isnot(None),
+            Task.status.in_(["pending", "running"])
+        ).order_by(
+            Task.job_id,
+            Task.task_type,
+            Task.task_index
+        ).all()
+
+        for task in tasks:
+            scheduled_kubernetes_jobs = []
+
+            try:
+                job = db.query(Job).filter(Job.job_id == task.job_id).first()
+
+                if not job:
+                    continue
+
+                scheduled_kubernetes_jobs = reconcile_kubernetes_task(
+                    db,
+                    job,
+                    task
+                )
+                db.commit()
+            except HTTPException as exc:
+                db.rollback()
+                cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+                print(f"Kubernetes reconciliation skipped task {task.task_id}: {exc.detail}")
+            except Exception as exc:
+                db.rollback()
+                cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+                print(f"Kubernetes reconciliation failed task {task.task_id}: {exc}")
+    finally:
+        db.close()
+
+
+def kubernetes_reconciliation_loop():
+    """
+    Background loop for Manager-side Kubernetes monitoring.
+    """
+
+    while True:
+        try:
+            reconcile_kubernetes_tasks_once()
+        except Exception as exc:
+            print(f"Kubernetes reconciliation loop error: {exc}")
+
+        time.sleep(KUBERNETES_RECONCILE_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+def start_kubernetes_reconciler():
+    """
+    Start the optional Kubernetes reconciliation loop.
+    """
+
+    if not KUBERNETES_RECONCILE_ENABLED:
+        return
+
+    thread = threading.Thread(
+        target=kubernetes_reconciliation_loop,
+        daemon=True
+    )
+    thread.start()
 
 
 @app.get("/")
@@ -1423,29 +1783,21 @@ def start_task(
             detail=f"Cannot start a task for a {job.status} job"
         )
 
-    if task.status != "pending":
+    if task.status not in ["pending", "running"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Only pending tasks can be started. Current status: {task.status}"
+            detail=(
+                "Only pending or running tasks can be started. "
+                f"Current status: {task.status}"
+            )
         )
 
-    task.attempt_count += 1
-    task.status = "running"
-    task.started_at = now_utc()
-    task.completed_at = None
-    task.error_message = None
-
-    if request.kubernetes_job_name:
-        task.kubernetes_job_name = request.kubernetes_job_name
-
-    attempt = TaskAttempt(
-        task_id=task.task_id,
-        attempt_number=task.attempt_count,
-        status="running",
+    attempt = mark_task_running(
+        db,
+        task,
+        kubernetes_job_name=request.kubernetes_job_name,
         kubernetes_pod_name=request.kubernetes_pod_name
     )
-
-    db.add(attempt)
     recalculate_job_status(db, job)
 
     db.commit()
