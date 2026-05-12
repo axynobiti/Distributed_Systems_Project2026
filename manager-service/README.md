@@ -135,8 +135,12 @@ Kubernetes scheduling is disabled by default for local development. Set
 another Kubernetes environment with access to the Kubernetes API.
 
 When enabled, the Manager creates one Kubernetes Job for each map task after job
-submission. Each worker Job receives environment variables describing exactly one
-task:
+submission. After all map tasks complete and shuffle creates reduce tasks, the
+Manager schedules one Kubernetes Job per reduce task. If a task fails but still
+has retries left, the Manager clears the old worker Job name and schedules a new
+Kubernetes Job for the next attempt.
+
+Each worker Job receives environment variables describing exactly one task:
 
 ```text
 TASK_TYPE

@@ -1025,6 +1025,21 @@ def schedule_tasks_if_enabled(job: Job, tasks, scheduled_job_names=None):
     return scheduled_job_names
 
 
+def get_pending_unscheduled_tasks(db: Session, job_id: int, task_type: str):
+    """
+    Return pending tasks of a given type that do not have a Kubernetes Job yet.
+    """
+
+    return db.query(Task).filter(
+        Task.job_id == job_id,
+        Task.task_type == task_type,
+        Task.status == "pending",
+        Task.kubernetes_job_name.is_(None)
+    ).order_by(
+        Task.task_index
+    ).all()
+
+
 def get_latest_attempt(db: Session, task: Task):
     """
     Return the most recent attempt for a task, if one exists.
@@ -1418,8 +1433,10 @@ def start_task(
     task.status = "running"
     task.started_at = now_utc()
     task.completed_at = None
-    task.kubernetes_job_name = request.kubernetes_job_name
     task.error_message = None
+
+    if request.kubernetes_job_name:
+        task.kubernetes_job_name = request.kubernetes_job_name
 
     attempt = TaskAttempt(
         task_id=task.task_id,
@@ -1477,26 +1494,51 @@ def complete_task(
             detail=f"Only running tasks can be completed. Current status: {task.status}"
         )
 
-    task.status = "completed"
-    task.completed_at = now_utc()
+    scheduled_kubernetes_jobs = []
+    attempt = None
 
-    if request.output_path:
-        task.output_path = request.output_path
+    try:
+        task.status = "completed"
+        task.completed_at = now_utc()
 
-    attempt = get_latest_attempt(db, task)
+        if request.output_path:
+            task.output_path = request.output_path
 
-    if attempt:
-        attempt.status = "completed"
-        attempt.completed_at = now_utc()
+        attempt = get_latest_attempt(db, task)
 
-    recalculate_job_status(db, job)
+        if attempt:
+            attempt.status = "completed"
+            attempt.completed_at = now_utc()
 
-    db.commit()
+        recalculate_job_status(db, job)
+
+        reduce_tasks_to_schedule = get_pending_unscheduled_tasks(
+            db,
+            job.job_id,
+            "reduce"
+        )
+        scheduled_kubernetes_jobs = schedule_tasks_if_enabled(
+            job,
+            reduce_tasks_to_schedule,
+            scheduled_kubernetes_jobs
+        )
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+        raise
+    except Exception:
+        db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+        raise
+
     db.refresh(job)
     db.refresh(task)
 
     response = {
         "success": True,
+        "kubernetes_jobs_created": scheduled_kubernetes_jobs,
         "job": serialize_job(job),
         "task": serialize_task(task)
     }
@@ -1541,6 +1583,8 @@ def fail_task(
             detail=f"Only pending or running tasks can fail. Current status: {task.status}"
         )
 
+    scheduled_kubernetes_jobs = []
+
     if task.status == "pending":
         task.attempt_count += 1
 
@@ -1568,15 +1612,33 @@ def fail_task(
         task.status = "pending"
         task.started_at = None
         task.completed_at = None
+        task.kubernetes_job_name = None
         will_retry = True
     else:
         task.status = "failed"
         task.completed_at = now_utc()
         will_retry = False
 
-    recalculate_job_status(db, job)
+    try:
+        recalculate_job_status(db, job)
 
-    db.commit()
+        if will_retry:
+            scheduled_kubernetes_jobs = schedule_tasks_if_enabled(
+                job,
+                [task],
+                scheduled_kubernetes_jobs
+            )
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+        raise
+    except Exception:
+        db.rollback()
+        cleanup_kubernetes_jobs(scheduled_kubernetes_jobs)
+        raise
+
     db.refresh(job)
     db.refresh(task)
     db.refresh(attempt)
@@ -1584,6 +1646,7 @@ def fail_task(
     return {
         "success": True,
         "will_retry": will_retry,
+        "kubernetes_jobs_created": scheduled_kubernetes_jobs,
         "job": serialize_job(job),
         "task": serialize_task(task),
         "attempt": serialize_attempt(attempt)
