@@ -169,6 +169,8 @@ created Kubernetes Job name in each task row as `kubernetes_job_name`.
 
 Set `KUBERNETES_RECONCILE_ENABLED=true` to start a background Manager loop that
 polls Kubernetes Job status every `KUBERNETES_RECONCILE_INTERVAL_SECONDS`.
+Each Manager replica only reconciles jobs where the stored `manager_id` matches
+its own `MANAGER_ID`.
 
 The reconciler keeps PostgreSQL task metadata aligned with Kubernetes:
 

@@ -1443,7 +1443,11 @@ def reconcile_kubernetes_tasks_once():
     db = SessionLocal()
 
     try:
-        tasks = db.query(Task).filter(
+        tasks = db.query(Task).join(
+            Job,
+            Task.job_id == Job.job_id
+        ).filter(
+            Job.manager_id == MANAGER_ID,
             Task.kubernetes_job_name.isnot(None),
             Task.status.in_(["pending", "running"])
         ).order_by(
@@ -1456,7 +1460,10 @@ def reconcile_kubernetes_tasks_once():
             scheduled_kubernetes_jobs = []
 
             try:
-                job = db.query(Job).filter(Job.job_id == task.job_id).first()
+                job = db.query(Job).filter(
+                    Job.job_id == task.job_id,
+                    Job.manager_id == MANAGER_ID
+                ).first()
 
                 if not job:
                     continue
