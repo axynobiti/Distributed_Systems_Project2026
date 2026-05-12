@@ -6,6 +6,10 @@ import requests
 # For local testing, the FastAPI service runs on localhost port 8000.
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
 
+# Base URL of the manager service.
+# This will be used later when the Manager Service is implemented.
+MANAGER_SERVICE_URL = os.getenv("MANAGER_SERVICE_URL", "http://127.0.0.1:8001")
+
 # Local file used to store the current user's JWT token.
 # This CLI supports one active logged-in user at a time.
 TOKEN_FILE = ".auth_token"
@@ -254,6 +258,45 @@ def logout(args):
         print("No active login found.")
 
 
+def submit_job(args):
+    """
+    Placeholder for submitting a MapReduce job.
+
+    Later this will call:
+    POST /jobs
+    """
+
+    print("submit-job command selected.")
+    print("This will later call: POST /jobs")
+    print("Manager Service is not implemented yet.")
+
+
+def get_job_status(args):
+    """
+    Placeholder for getting the status/details of a MapReduce job.
+
+    Later this will call:
+    GET /jobs/{job_id}
+    """
+
+    print("job-status command selected.")
+    print(f"This will later call: GET /jobs/{args.job_id}")
+    print("Manager Service is not implemented yet.")
+
+
+def get_job_result(args):
+    """
+    Placeholder for getting the result of a MapReduce job.
+
+    Later this will call:
+    GET /jobs/{job_id}/result
+    """
+
+    print("job-result command selected.")
+    print(f"This will later call: GET /jobs/{args.job_id}/result")
+    print("Manager Service is not implemented yet.")
+
+
 def main():
     """
     Configure the CLI commands and route each command to its handler function.
@@ -298,6 +341,20 @@ def main():
     # logout command
     logout_parser = subparsers.add_parser("logout")
     logout_parser.set_defaults(func=logout)
+
+    # submit-job command
+    submit_job_parser = subparsers.add_parser("submit-job")
+    submit_job_parser.set_defaults(func=submit_job)
+
+    # job-status command
+    job_status_parser = subparsers.add_parser("job-status")
+    job_status_parser.add_argument("--job-id", required=True)
+    job_status_parser.set_defaults(func=get_job_status)
+
+    # job-result command
+    job_result_parser = subparsers.add_parser("job-result")
+    job_result_parser.add_argument("--job-id", required=True)
+    job_result_parser.set_defaults(func=get_job_result)
 
     args = parser.parse_args()
 
