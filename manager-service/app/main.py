@@ -7,7 +7,7 @@ import re
 import threading
 import time
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -433,6 +433,32 @@ def download_minio_object(path: str):
             status_code=503,
             detail=f"Could not read object from MinIO: {path}"
         )
+
+
+def get_completed_result_objects(job: Job):
+    """
+    Return sorted MinIO result objects for a completed job.
+    """
+
+    if job.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Result is not available yet"
+        )
+
+    output_prefix = get_job_output_prefix(job)
+    result_objects = sorted(
+        list_minio_objects(output_prefix),
+        key=lambda item: item.object_name
+    )
+
+    if not result_objects:
+        raise HTTPException(
+            status_code=404,
+            detail="Result objects were not found in MinIO"
+        )
+
+    return output_prefix, result_objects
 
 
 def upload_job_file(job_id: int, uploaded_file: UploadFile, kind: str):
@@ -2051,20 +2077,7 @@ def retrieve_job_result(
     job = get_job_or_404(db, job_id)
     ensure_job_access(user_info, job, "retrieve")
 
-    if job.status != "completed":
-        raise HTTPException(
-            status_code=400,
-            detail="Result is not available yet"
-        )
-
-    output_prefix = get_job_output_prefix(job)
-    result_objects = list_minio_objects(output_prefix)
-
-    if not result_objects:
-        raise HTTPException(
-            status_code=404,
-            detail="Result objects were not found in MinIO"
-        )
+    output_prefix, result_objects = get_completed_result_objects(job)
 
     return {
         "job_id": job.job_id,
@@ -2080,6 +2093,40 @@ def retrieve_job_result(
             )
         ]
     }
+
+
+@app.get("/jobs/{job_id}/result/content")
+def retrieve_job_result_content(
+    job_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve the actual text content of a completed job's reducer outputs.
+
+    The reducer output objects are downloaded from MinIO in object-name order
+    and concatenated into one plain-text response for CLI/UI display.
+    """
+
+    user_info = validate_token(credentials)
+    job = get_job_or_404(db, job_id)
+    ensure_job_access(user_info, job, "retrieve")
+
+    _, result_objects = get_completed_result_objects(job)
+    result_content = b""
+
+    for minio_object in result_objects:
+        object_content = download_minio_object(minio_object.object_name)
+
+        if result_content and not result_content.endswith(b"\n"):
+            result_content += b"\n"
+
+        result_content += object_content
+
+    return Response(
+        content=result_content,
+        media_type="text/plain"
+    )
 
 
 @app.post("/jobs/{job_id}/complete")

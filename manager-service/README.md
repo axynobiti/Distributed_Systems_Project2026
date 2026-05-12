@@ -131,6 +131,10 @@ The Manager then creates one reduce task per reducer input object.
 It lists final result objects from MinIO under the job output prefix, returning
 their object names, `s3://...` paths, sizes, etags, and last-modified times.
 
+`GET /jobs/{job_id}/result/content` downloads the final result objects from
+MinIO, concatenates them in reducer-output order, and returns the result content
+as plain text.
+
 ## Kubernetes Scheduling
 
 Kubernetes scheduling is disabled by default for local development. Set
