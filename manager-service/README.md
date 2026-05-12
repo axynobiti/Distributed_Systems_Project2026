@@ -135,6 +135,10 @@ their object names, `s3://...` paths, sizes, etags, and last-modified times.
 MinIO, concatenates them in reducer-output order, and returns the result content
 as plain text.
 
+The temporary admin-only `POST /jobs/{job_id}/complete` endpoint is for local
+testing. It writes the provided test result to the same MinIO output prefix used
+by real reducer outputs, so the result retrieval endpoints continue to work.
+
 ## Kubernetes Scheduling
 
 Kubernetes scheduling is disabled by default for local development. Set

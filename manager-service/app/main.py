@@ -2159,16 +2159,45 @@ def complete_job(
             detail="Job not found"
         )
 
-    job.status = "completed"
-    job.result = request.result
-    job.completed_at = now_utc()
+    result_object_name = f"jobs/{job.job_id}/output/manual-result.txt"
+    uploaded_object = None
 
-    db.commit()
+    try:
+        ensure_minio_bucket()
+        result_path, uploaded_object = upload_bytes_object(
+            result_object_name,
+            request.result.encode("utf-8"),
+            "text/plain"
+        )
+
+        job.status = "completed"
+        job.output_path = f"jobs/{job.job_id}/output"
+        job.result = request.result
+        job.completed_at = now_utc()
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+
+        if uploaded_object:
+            cleanup_minio_objects([uploaded_object])
+
+        raise
+    except Exception:
+        db.rollback()
+
+        if uploaded_object:
+            cleanup_minio_objects([uploaded_object])
+
+        raise
+
     db.refresh(job)
 
     return {
         "success": True,
         "job_id": job.job_id,
         "status": job.status,
+        "output_path": job.output_path,
+        "result_path": result_path,
         "result": job.result
     }
