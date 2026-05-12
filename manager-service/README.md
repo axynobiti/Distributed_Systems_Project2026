@@ -69,7 +69,9 @@ export MINIO_SECRET_KEY="minioadmin"
 export MINIO_BUCKET="mapreduce"
 export MINIO_SECURE="false"
 export MAP_CHUNK_SIZE_BYTES="5242880"
-export DEFAULT_NUM_REDUCERS="1"
+export MIN_NUM_REDUCERS="1"
+export MAX_NUM_REDUCERS="8"
+export MAP_TASKS_PER_REDUCER="2"
 export KUBERNETES_SCHEDULING_ENABLED="false"
 export KUBERNETES_NAMESPACE="default"
 export WORKER_IMAGE="mapreduce-worker:latest"
@@ -95,8 +97,10 @@ reducer_file=<uploaded reducer code>
 The Manager uploads the submitted files to MinIO, splits the input into
 line-based chunk objects, and stores the MinIO paths in PostgreSQL before
 creating the initial map task metadata. The user does not choose the number of
-mappers or reducers. The Manager creates one map task per input chunk and uses
-`DEFAULT_NUM_REDUCERS` for the reducer count.
+mappers or reducers. The Manager creates one map task per input chunk and
+chooses the reducer count from the number of map tasks, bounded by
+`MIN_NUM_REDUCERS` and `MAX_NUM_REDUCERS`. `MAP_TASKS_PER_REDUCER` controls how
+quickly the reducer count grows.
 
 ## Result Retrieval
 

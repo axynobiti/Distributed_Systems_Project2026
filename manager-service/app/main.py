@@ -90,7 +90,12 @@ MAP_CHUNK_SIZE_BYTES = get_positive_int_env(
     "MAP_CHUNK_SIZE_BYTES",
     5 * 1024 * 1024
 )
-DEFAULT_NUM_REDUCERS = get_positive_int_env("DEFAULT_NUM_REDUCERS", 1)
+MIN_NUM_REDUCERS = get_positive_int_env("MIN_NUM_REDUCERS", 1)
+MAX_NUM_REDUCERS = max(
+    MIN_NUM_REDUCERS,
+    get_positive_int_env("MAX_NUM_REDUCERS", 8)
+)
+MAP_TASKS_PER_REDUCER = get_positive_int_env("MAP_TASKS_PER_REDUCER", 2)
 
 # Kubernetes worker scheduling configuration.
 KUBERNETES_SCHEDULING_ENABLED = get_bool_env(
@@ -509,6 +514,26 @@ def split_input_file_to_minio_chunks(job_id: int, uploaded_file: UploadFile):
         cleanup_minio_objects(chunk_objects)
         uploaded_file.file.seek(0)
         raise
+
+
+def calculate_reducer_count(num_mappers: int):
+    """
+    Choose the number of reduce tasks from the number of map tasks.
+
+    The policy is intentionally simple:
+    - more map chunks create more reducers,
+    - reducers are bounded by MIN_NUM_REDUCERS and MAX_NUM_REDUCERS,
+    - MAP_TASKS_PER_REDUCER controls how aggressively reducers scale up.
+    """
+
+    mapper_count = max(1, num_mappers)
+    reducer_count = (
+        mapper_count + MAP_TASKS_PER_REDUCER - 1
+    ) // MAP_TASKS_PER_REDUCER
+
+    reducer_count = max(MIN_NUM_REDUCERS, reducer_count)
+
+    return min(MAX_NUM_REDUCERS, reducer_count)
 
 
 def serialize_task(task: Task):
@@ -964,7 +989,6 @@ def submit_job(
 
     user_info = validate_token(credentials)
     input_size_bytes = get_uploaded_file_size(input_file)
-    manager_num_reducers = DEFAULT_NUM_REDUCERS
 
     uploaded_objects = []
     scheduled_kubernetes_jobs = []
@@ -977,7 +1001,7 @@ def submit_job(
         mapper_file="pending-upload",
         reducer_file="pending-upload",
         num_mappers=1,
-        num_reducers=manager_num_reducers,
+        num_reducers=MIN_NUM_REDUCERS,
         status="pending",
         result=None
     )
@@ -1024,7 +1048,7 @@ def submit_job(
         uploaded_objects.extend(input_chunk_objects)
 
         new_job.num_mappers = len(input_chunk_paths)
-        new_job.num_reducers = manager_num_reducers
+        new_job.num_reducers = calculate_reducer_count(new_job.num_mappers)
 
         map_tasks = [
             build_map_task(new_job, task_index, chunk_path)
@@ -1059,6 +1083,9 @@ def submit_job(
         "status": new_job.status,
         "input_size_bytes": input_size_bytes,
         "map_chunk_size_bytes": MAP_CHUNK_SIZE_BYTES,
+        "map_tasks_per_reducer": MAP_TASKS_PER_REDUCER,
+        "min_num_reducers": MIN_NUM_REDUCERS,
+        "max_num_reducers": MAX_NUM_REDUCERS,
         "num_mappers": new_job.num_mappers,
         "num_reducers": new_job.num_reducers,
         "map_tasks_created": len(map_tasks),
