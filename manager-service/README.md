@@ -102,6 +102,26 @@ chooses the reducer count from the number of map tasks, bounded by
 `MIN_NUM_REDUCERS` and `MAX_NUM_REDUCERS`. `MAP_TASKS_PER_REDUCER` controls how
 quickly the reducer count grows.
 
+## Shuffle Phase
+
+When all map tasks for a job are completed, the Manager reads mapper output
+objects from MinIO, groups values by key, partitions the keys across the
+configured reducer count, and writes reducer input objects back to MinIO.
+
+Mapper output is expected as JSON Lines, one key/value pair per line:
+
+```json
+["word", 1]
+```
+
+Reducer input is also JSON Lines, one grouped key per line:
+
+```json
+["word", [1, 1, 1]]
+```
+
+The Manager then creates one reduce task per reducer input object.
+
 ## Result Retrieval
 
 `GET /jobs/{job_id}/result` is available only after a job reaches `completed`.

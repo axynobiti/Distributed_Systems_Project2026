@@ -1,5 +1,7 @@
 from datetime import datetime
+import hashlib
 from io import BytesIO
+import json
 import os
 import re
 
@@ -300,6 +302,19 @@ def minio_uri(object_name: str):
     return f"s3://{MINIO_BUCKET}/{object_name}"
 
 
+def parse_minio_path(path: str):
+    """
+    Convert an s3:// URI or raw object name into a bucket/object pair.
+    """
+
+    if path.startswith("s3://"):
+        without_scheme = path[len("s3://"):]
+        bucket, object_name = without_scheme.split("/", 1)
+        return bucket, object_name
+
+    return MINIO_BUCKET, path.lstrip("/")
+
+
 def get_job_output_prefix(job: Job):
     """
     Return the MinIO object prefix where a job's final output is stored.
@@ -358,6 +373,33 @@ def list_minio_objects(prefix: str):
         raise HTTPException(
             status_code=503,
             detail="Could not list result objects from MinIO"
+        )
+
+
+def download_minio_object(path: str):
+    """
+    Download an object from MinIO by s3:// URI or raw object path.
+    """
+
+    bucket, object_name = parse_minio_path(path)
+
+    try:
+        response = minio_client.get_object(bucket, object_name)
+
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+    except S3Error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not read object from MinIO: {path}"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not read object from MinIO: {path}"
         )
 
 
@@ -536,6 +578,117 @@ def calculate_reducer_count(num_mappers: int):
     return min(MAX_NUM_REDUCERS, reducer_count)
 
 
+def parse_map_output_pairs(map_output_bytes: bytes, source_path: str):
+    """
+    Parse mapper output JSON Lines into key/value pairs.
+
+    Expected line format:
+    ["key", value]
+    """
+
+    output_text = map_output_bytes.decode("utf-8")
+    pairs = []
+
+    for line_number, line in enumerate(output_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+
+        try:
+            pair = json.loads(line)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Invalid JSON in mapper output {source_path} "
+                    f"at line {line_number}"
+                )
+            )
+
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Invalid key/value pair in mapper output {source_path} "
+                    f"at line {line_number}"
+                )
+            )
+
+        pairs.append((pair[0], pair[1]))
+
+    return pairs
+
+
+def get_reducer_index(key, num_reducers: int):
+    """
+    Pick the reducer partition for a key using a stable hash.
+    """
+
+    encoded_key = json.dumps(key, sort_keys=True).encode("utf-8")
+    key_hash = hashlib.sha256(encoded_key).hexdigest()
+
+    return int(key_hash, 16) % num_reducers
+
+
+def encode_reducer_input(groups):
+    """
+    Encode reducer input as JSON Lines.
+
+    Each line has the form:
+    [key, [values...]]
+    """
+
+    lines = [
+        json.dumps([key, values])
+        for key, values in sorted(
+            groups.items(),
+            key=lambda item: json.dumps(item[0], sort_keys=True)
+        )
+    ]
+
+    return ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+
+
+def shuffle_map_outputs_to_reducer_inputs(job: Job, map_tasks):
+    """
+    Read completed mapper outputs and create reducer input objects in MinIO.
+    """
+
+    reducer_groups = [
+        {}
+        for _ in range(job.num_reducers)
+    ]
+
+    for task in sorted(map_tasks, key=lambda item: item.task_index):
+        if not task.output_path:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Map task {task.task_id} has no output path"
+            )
+
+        map_output_bytes = download_minio_object(task.output_path)
+        pairs = parse_map_output_pairs(map_output_bytes, task.output_path)
+
+        for key, value in pairs:
+            reducer_index = get_reducer_index(key, job.num_reducers)
+            reducer_groups[reducer_index].setdefault(key, []).append(value)
+
+    reducer_input_paths = []
+
+    for reducer_index, groups in enumerate(reducer_groups):
+        object_name = (
+            f"jobs/{job.job_id}/reducer-input/"
+            f"reduce-{reducer_index:05d}.jsonl"
+        )
+        reducer_input_path, _ = upload_bytes_object(
+            object_name,
+            encode_reducer_input(groups),
+            "application/jsonl"
+        )
+        reducer_input_paths.append(reducer_input_path)
+
+    return reducer_input_paths
+
+
 def serialize_task(task: Task):
     """
     Convert a Task database row into a JSON-friendly dictionary.
@@ -650,7 +803,7 @@ def build_map_task(job: Job, task_index: int, input_path: str):
     )
 
 
-def build_reduce_task(job: Job, task_index: int):
+def build_reduce_task(job: Job, task_index: int, input_path: str):
     """
     Create one pending reduce task for a job whose map phase has completed.
 
@@ -662,9 +815,7 @@ def build_reduce_task(job: Job, task_index: int):
         job_id=job.job_id,
         task_type="reduce",
         task_index=task_index,
-        input_path=minio_uri(
-            f"jobs/{job.job_id}/intermediate/reduce-{task_index:05d}.json"
-        ),
+        input_path=input_path,
         output_path=minio_uri(
             f"jobs/{job.job_id}/output/reduce-{task_index:05d}.json"
         ),
@@ -903,9 +1054,11 @@ def create_reduce_tasks_if_ready(db: Session, job: Job):
     if not maps_completed or reduce_tasks:
         return []
 
+    reducer_input_paths = shuffle_map_outputs_to_reducer_inputs(job, map_tasks)
+
     new_reduce_tasks = [
-        build_reduce_task(job, task_index)
-        for task_index in range(job.num_reducers)
+        build_reduce_task(job, task_index, input_path)
+        for task_index, input_path in enumerate(reducer_input_paths)
     ]
 
     db.add_all(new_reduce_tasks)
