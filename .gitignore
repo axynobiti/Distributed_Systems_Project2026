@@ -8,6 +8,7 @@ venv/
 
 # Specifically ignore service venvs
 authentication-service/venv/
+manager-service/venv/
 ui-service/venv/
 
 # -------------------------
@@ -33,4 +34,5 @@ __pycache__/
 .env
 */.env
 authentication-service/.env
+manager-service/.env
 ui-service/.env

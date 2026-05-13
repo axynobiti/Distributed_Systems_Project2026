@@ -1,12 +1,13 @@
 import os
 import requests
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 
 
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
+MANAGER_SERVICE_URL = os.getenv("MANAGER_SERVICE_URL", "http://127.0.0.1:8002")
 
 app = FastAPI(title="UI Service")
 
@@ -253,15 +254,94 @@ def admin_delete_user(
 
 
 # -------------------------
-# Empty placeholders for later services
+# Manager service commands
 # -------------------------
 
-@app.post("/jobs")
-def submit_job(authorization: Optional[str] = Header(default=None)):
-    get_bearer_token(authorization)
+def proxy_manager_response(response):
+    try:
+        result = response.json()
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail="Manager Service returned invalid JSON."
+        )
+
+    if 200 <= response.status_code < 300:
+        return result
+
+    raise HTTPException(
+        status_code=response.status_code,
+        detail=result
+    )
+
+
+def manager_auth_headers(token: str):
     return {
-        "message": "submit-job is not implemented yet."
+        "Authorization": f"Bearer {token}"
     }
+
+
+@app.post("/jobs")
+def submit_job(
+    input_file: UploadFile = File(...),
+    mapper_file: UploadFile = File(...),
+    reducer_file: UploadFile = File(...),
+    authorization: Optional[str] = Header(default=None)
+):
+    token = get_bearer_token(authorization)
+    input_file.file.seek(0)
+    mapper_file.file.seek(0)
+    reducer_file.file.seek(0)
+
+    files = {
+        "input_file": (
+            input_file.filename,
+            input_file.file,
+            input_file.content_type or "application/octet-stream"
+        ),
+        "mapper_file": (
+            mapper_file.filename,
+            mapper_file.file,
+            mapper_file.content_type or "application/octet-stream"
+        ),
+        "reducer_file": (
+            reducer_file.filename,
+            reducer_file.file,
+            reducer_file.content_type or "application/octet-stream"
+        )
+    }
+
+    try:
+        response = requests.post(
+            f"{MANAGER_SERVICE_URL}/jobs",
+            headers=manager_auth_headers(token),
+            files=files
+        )
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="Manager Service unavailable."
+        )
+
+    return proxy_manager_response(response)
+
+
+@app.get("/jobs")
+def list_jobs(authorization: Optional[str] = Header(default=None)):
+    token = get_bearer_token(authorization)
+
+    try:
+        response = requests.get(
+            f"{MANAGER_SERVICE_URL}/jobs",
+            headers=manager_auth_headers(token)
+        )
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="Manager Service unavailable."
+        )
+
+    return proxy_manager_response(response)
 
 
 @app.get("/jobs/{job_id}")
@@ -269,11 +349,20 @@ def get_job_status(
     job_id: str,
     authorization: Optional[str] = Header(default=None)
 ):
-    get_bearer_token(authorization)
-    return {
-        "message": "job-status is not implemented yet.",
-        "job_id": job_id
-    }
+    token = get_bearer_token(authorization)
+
+    try:
+        response = requests.get(
+            f"{MANAGER_SERVICE_URL}/jobs/{job_id}",
+            headers=manager_auth_headers(token)
+        )
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="Manager Service unavailable."
+        )
+
+    return proxy_manager_response(response)
 
 
 @app.get("/jobs/{job_id}/result")
@@ -281,8 +370,17 @@ def get_job_result(
     job_id: str,
     authorization: Optional[str] = Header(default=None)
 ):
-    get_bearer_token(authorization)
-    return {
-        "message": "job-result is not implemented yet.",
-        "job_id": job_id
-    }
+    token = get_bearer_token(authorization)
+
+    try:
+        response = requests.get(
+            f"{MANAGER_SERVICE_URL}/jobs/{job_id}/result",
+            headers=manager_auth_headers(token)
+        )
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=503,
+            detail="Manager Service unavailable."
+        )
+
+    return proxy_manager_response(response)
