@@ -42,6 +42,22 @@ def auth_headers():
     }
 
 
+def print_json_response(response):
+    try:
+        print(response.json())
+    except ValueError:
+        print("Service returned invalid JSON.")
+        print(response.text)
+
+
+def validate_file_path(path, label):
+    if not os.path.isfile(path):
+        print(f"{label} file not found: {path}")
+        return False
+
+    return True
+
+
 def login(args):
     """
     Log in a user through the UI service.
@@ -242,17 +258,61 @@ def submit_job(args):
     if not headers:
         return
 
-    response = requests.post(
-        f"{UI_SERVICE_URL}/jobs",
-        headers=headers,
-        json={
-            "input": args.input,
-            "mapper": args.mapper,
-            "reducer": args.reducer
+    if not validate_file_path(args.input, "Input"):
+        return
+
+    if not validate_file_path(args.mapper, "Mapper"):
+        return
+
+    if not validate_file_path(args.reducer, "Reducer"):
+        return
+
+    with open(args.input, "rb") as input_file, \
+            open(args.mapper, "rb") as mapper_file, \
+            open(args.reducer, "rb") as reducer_file:
+        files = {
+            "input_file": (
+                os.path.basename(args.input),
+                input_file,
+                "application/octet-stream"
+            ),
+            "mapper_file": (
+                os.path.basename(args.mapper),
+                mapper_file,
+                "application/octet-stream"
+            ),
+            "reducer_file": (
+                os.path.basename(args.reducer),
+                reducer_file,
+                "application/octet-stream"
+            )
         }
+
+        response = requests.post(
+            f"{UI_SERVICE_URL}/jobs",
+            headers=headers,
+            files=files
+        )
+
+    print_json_response(response)
+
+
+def list_jobs(args):
+    """
+    List MapReduce jobs visible to the current user.
+    """
+
+    headers = auth_headers()
+
+    if not headers:
+        return
+
+    response = requests.get(
+        f"{UI_SERVICE_URL}/jobs",
+        headers=headers
     )
 
-    print(response.json())
+    print_json_response(response)
 
 
 def get_job_status(args):
@@ -270,7 +330,7 @@ def get_job_status(args):
         headers=headers
     )
 
-    print(response.json())
+    print_json_response(response)
 
 
 def get_job_result(args):
@@ -288,7 +348,7 @@ def get_job_result(args):
         headers=headers
     )
 
-    print(response.json())
+    print_json_response(response)
 
 
 def main():
@@ -346,6 +406,10 @@ def main():
     submit_job_parser.add_argument("--mapper", required=True)
     submit_job_parser.add_argument("--reducer", required=True)
     submit_job_parser.set_defaults(func=submit_job)
+
+    # jobs list command
+    list_jobs_parser = jobs_subparsers.add_parser("list")
+    list_jobs_parser.set_defaults(func=list_jobs)
 
     # jobs view command
     job_status_parser = jobs_subparsers.add_parser("view")
