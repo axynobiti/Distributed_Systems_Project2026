@@ -1,5 +1,56 @@
 # Distributed Systems Project 2026
 
+## Prerequisites
+
+Install Minikube first:
+
+```bash
+curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+rm minikube-linux-amd64
+```
+
+Verify the installation:
+
+```bash
+minikube version
+```
+
+Install Docker as the Minikube driver:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+Start Minikube with Docker:
+
+```bash
+minikube start --driver=docker
+```
+
+Install kubectl:
+
+```bash
+sudo snap install kubectl --classic
+```
+
+Verify kubectl:
+
+```bash
+kubectl version --client
+```
+
+Connect kubectl to Minikube:
+
+```bash
+minikube status
+kubectl config use-context minikube
+```
+
 ## Start the Kubernetes cluster
 
 The project can be started on Minikube with:
@@ -21,6 +72,12 @@ To use a custom image tag:
 
 ```bash
 make cluster-ready TAG=v1
+```
+
+Deploy the application:
+
+```bash
+make deploy
 ```
 
 ## Check the deployment
