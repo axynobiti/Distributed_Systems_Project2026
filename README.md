@@ -110,6 +110,120 @@ python3 cli.py admin list-users
 python3 cli.py jobs list
 ```
 
+## How to run a test MapReduce job
+
+This section explains how to run a simple word-count MapReduce job using the CLI.
+
+### 1. Create the test files
+
+From the project root:
+
+```bash
+cd ~/Distributed_Systems_Project2026
+mkdir -p mr-test
+```
+
+Create the input file:
+
+```bash
+printf "hello world\nhello mapreduce\n" > mr-test/input.txt
+```
+
+Create the mapper file:
+
+```bash
+cat > mr-test/mapper.py <<'PY'
+import argparse, json
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input")
+parser.add_argument("--output")
+parser.add_argument("--task-type")
+args = parser.parse_args()
+
+with open(args.input) as f, open(args.output, "w") as out:
+    for line in f:
+        for word in line.split():
+            out.write(json.dumps([word, 1]) + "\n")
+PY
+```
+
+Create the reducer file:
+
+```bash
+cat > mr-test/reducer.py <<'PY'
+import argparse, json
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input")
+parser.add_argument("--output")
+parser.add_argument("--task-type")
+args = parser.parse_args()
+
+with open(args.input) as f, open(args.output, "w") as out:
+    for line in f:
+        key, values = json.loads(line)
+        out.write(f"{key} {sum(values)}\n")
+PY
+```
+
+### 2. Log in
+
+The default admin user is:
+
+```text
+username: admin
+password: admin123
+```
+
+Log in through the UI service:
+
+```bash
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py login --username admin --password admin123
+```
+
+### 3. Submit the MapReduce job
+
+Submit the test job:
+
+```bash
+python3 cli.py jobs submit \
+  --input mr-test/input.txt \
+  --mapper mr-test/mapper.py \
+  --reducer mr-test/reducer.py
+```
+
+### 4. Check job status
+
+Use the returned job id:
+
+```bash
+python3 cli.py jobs view --job-id <job-id>
+```
+
+Wait until the job status becomes:
+
+```text
+completed
+```
+
+### 5. Retrieve the job result
+
+After the job is completed, retrieve the result:
+
+```bash
+python3 cli.py jobs retrieve result --job-id <job-id>
+```
+
+Expected result:
+
+```text
+hello 2
+world 1
+mapreduce 1
+```
+
+
 ## Redeploy after code changes
 
 For UI changes:
