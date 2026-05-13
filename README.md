@@ -74,12 +74,6 @@ To use a custom image tag:
 make cluster-ready TAG=v1
 ```
 
-Deploy the application:
-
-```bash
-make deploy
-```
-
 ## Check the deployment
 
 ```bash
