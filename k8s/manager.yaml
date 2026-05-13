@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: manager
+  namespace: distributed-systems-project2026
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: manager-worker-job-role
+  namespace: distributed-systems-project2026
+rules:
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+  - apiGroups:
+      - batch
+    resources:
+      - jobs/status
+    verbs:
+      - get
+      - list
+      - watch
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: manager-worker-job-rolebinding
+  namespace: distributed-systems-project2026
+subjects:
+  - kind: ServiceAccount
+    name: manager
+    namespace: distributed-systems-project2026
+roleRef:
+  kind: Role
+  name: manager-worker-job-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: manager
+  namespace: distributed-systems-project2026
+spec:
+  type: ClusterIP
+  selector:
+    app: manager
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: manager-headless
+  namespace: distributed-systems-project2026
+spec:
+  clusterIP: None
+  selector:
+    app: manager
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: manager
+  namespace: distributed-systems-project2026
+spec:
+  serviceName: manager-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: manager
+  template:
+    metadata:
+      labels:
+        app: manager
+    spec:
+      serviceAccountName: manager
+      containers:
+        - name: manager
+          image: ds-project/manager:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DDS_DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: dds-postgres-config
+                  key: DDS_DB_HOST
+            - name: DDS_DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: dds-postgres-config
+                  key: DDS_DB_PORT
+            - name: DDS_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: dds-postgres-config
+                  key: DDS_DB_NAME
+            - name: DDS_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: dds-postgres-config
+                  key: DDS_DB_USER
+            - name: DDS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dds-postgres-secret
+                  key: DDS_DB_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://$(DDS_DB_USER):$(DDS_DB_PASSWORD)@$(DDS_DB_HOST):$(DDS_DB_PORT)/$(DDS_DB_NAME)"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth:8000"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: MINIO_ROOT_USER
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: MINIO_ROOT_PASSWORD
+            - name: MINIO_BUCKET
+              value: "mapreduce"
+            - name: MINIO_SECURE
+              value: "false"
+            - name: KUBERNETES_NAMESPACE
+              value: "distributed-systems-project2026"
+            - name: KUBERNETES_SCHEDULING_ENABLED
+              value: "true"
+            - name: KUBERNETES_RECONCILE_ENABLED
+              value: "true"
+            - name: WORKER_IMAGE
+              value: "ds-project/worker:latest"
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: "IfNotPresent"
+            - name: MANAGER_INTERNAL_URL
+              value: "http://manager:8000"
