@@ -1,5 +1,3 @@
-import os
-
 from passlib.context import CryptContext
 
 from app.database import SessionLocal, engine
@@ -17,10 +15,11 @@ Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 
 # Default administrator account for local development/testing.
-# Kubernetes can override these through the auth-seed-admin Secret.
-admin_username = os.getenv("SEED_ADMIN_USERNAME", "admin")
-admin_email = os.getenv("SEED_ADMIN_EMAIL", "admin@example.com")
-admin_password = os.getenv("SEED_ADMIN_PASSWORD", "admin123")
+# For a real deployment, these values should come from environment variables
+# or be created through a secure setup process.
+admin_username = "admin"
+admin_email = "admin@example.com"
+admin_password = "admin123"
 
 # Check whether the initial admin user already exists.
 existing_admin = db.query(User).filter(User.username == admin_username).first()
