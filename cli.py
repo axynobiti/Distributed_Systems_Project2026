@@ -5,7 +5,7 @@ import requests
 
 # Base URL of the UI service.
 # The CLI talks to the UI service, not directly to the auth service.
-UI_SERVICE_URL = os.getenv("UI_SERVICE_URL", "http://127.0.0.1:8001")
+UI_SERVICE_URL = os.getenv("UI_SERVICE_URL", "http://192.168.49.2:30080")
 TOKEN_FILE = ".auth_token"
 
 
@@ -40,6 +40,65 @@ def auth_headers():
     return {
         "Authorization": f"Bearer {token}"
     }
+
+
+def print_json_response(response):
+    try:
+        print(response.json())
+    except ValueError:
+        print("Service returned invalid JSON.")
+        print(response.text)
+
+
+def response_json(response):
+    try:
+        return response.json()
+    except ValueError:
+        return {
+            "detail": response.text or "Service returned invalid JSON."
+        }
+
+
+def detail_text(detail):
+    if isinstance(detail, dict):
+        if "detail" in detail:
+            return detail_text(detail["detail"])
+
+        if "error" in detail:
+            return str(detail["error"])
+
+        return ", ".join(
+            f"{key}: {value}"
+            for key, value in detail.items()
+        )
+
+    return str(detail)
+
+
+def print_error(action, result):
+    detail = result.get("detail", result)
+    print(f"{action} failed: {detail_text(detail)}")
+
+
+def print_task_progress(progress):
+    if not progress:
+        return
+
+    print(
+        "Tasks: "
+        f"{progress.get('completed', 0)}/{progress.get('total', 0)} completed, "
+        f"{progress.get('running', 0)} running, "
+        f"{progress.get('pending', 0)} pending, "
+        f"{progress.get('failed', 0)} failed"
+    )
+
+
+def validate_file_path(path, label):
+    if not os.path.isfile(path):
+        print(f"{label} file not found: {path}")
+        return False
+
+    return True
 
 
 def login(args):
@@ -242,17 +301,89 @@ def submit_job(args):
     if not headers:
         return
 
-    response = requests.post(
-        f"{UI_SERVICE_URL}/jobs",
-        headers=headers,
-        json={
-            "input": args.input,
-            "mapper": args.mapper,
-            "reducer": args.reducer
+    if not validate_file_path(args.input, "Input"):
+        return
+
+    if not validate_file_path(args.mapper, "Mapper"):
+        return
+
+    if not validate_file_path(args.reducer, "Reducer"):
+        return
+
+    with open(args.input, "rb") as input_file, \
+            open(args.mapper, "rb") as mapper_file, \
+            open(args.reducer, "rb") as reducer_file:
+        files = {
+            "input_file": (
+                os.path.basename(args.input),
+                input_file,
+                "application/octet-stream"
+            ),
+            "mapper_file": (
+                os.path.basename(args.mapper),
+                mapper_file,
+                "application/octet-stream"
+            ),
+            "reducer_file": (
+                os.path.basename(args.reducer),
+                reducer_file,
+                "application/octet-stream"
+            )
         }
+
+        response = requests.post(
+            f"{UI_SERVICE_URL}/jobs",
+            headers=headers,
+            files=files
+        )
+
+    result = response_json(response)
+
+    if response.status_code == 200 and result.get("success"):
+        print("Job submitted successfully.")
+        print("Job ID:", result["job_id"])
+        print("Status:", result["status"])
+        print("Mappers:", result["num_mappers"])
+        print("Reducers:", result["num_reducers"])
+        print_task_progress(result.get("task_progress"))
+    else:
+        print_error("Job submission", result)
+
+
+def list_jobs(args):
+    """
+    List MapReduce jobs visible to the current user.
+    """
+
+    headers = auth_headers()
+
+    if not headers:
+        return
+
+    response = requests.get(
+        f"{UI_SERVICE_URL}/jobs",
+        headers=headers
     )
 
-    print(response.json())
+    result = response_json(response)
+
+    if response.status_code != 200:
+        print_error("List jobs", result)
+        return
+
+    if not result:
+        print("No jobs found.")
+        return
+
+    print("Jobs:")
+
+    for job in result:
+        print(
+            f"- Job {job['job_id']} | "
+            f"status: {job['status']} | "
+            f"mappers: {job['num_mappers']} | "
+            f"reducers: {job['num_reducers']}"
+        )
 
 
 def get_job_status(args):
@@ -270,7 +401,37 @@ def get_job_status(args):
         headers=headers
     )
 
-    print(response.json())
+    result = response_json(response)
+
+    if response.status_code != 200:
+        print_error("Get job status", result)
+        return
+
+    print("Job ID:", result["job_id"])
+    print("Status:", result["status"])
+    print("Owner:", result["username"])
+    print("Mappers:", result["num_mappers"])
+    print("Reducers:", result["num_reducers"])
+
+    if result.get("output_path"):
+        print("Output:", result["output_path"])
+
+    if result.get("error_message"):
+        print("Error:", result["error_message"])
+
+    print_task_progress(result.get("task_progress"))
+
+    tasks = result.get("tasks") or []
+
+    if tasks:
+        print("Task details:")
+
+        for task in tasks:
+            print(
+                f"- {task['task_type']} {task['task_index']} | "
+                f"status: {task['status']} | "
+                f"attempts: {task['attempt_count']}"
+            )
 
 
 def get_job_result(args):
@@ -284,11 +445,23 @@ def get_job_result(args):
         return
 
     response = requests.get(
-        f"{UI_SERVICE_URL}/jobs/{args.job_id}/result",
+        f"{UI_SERVICE_URL}/jobs/{args.job_id}/result/content",
         headers=headers
     )
 
-    print(response.json())
+    result = response_json(response)
+
+    if response.status_code != 200:
+        print_error("Retrieve result", result)
+        return
+
+    content = result.get("content")
+
+    if content is None:
+        print("Result is empty.")
+        return
+
+    print(content, end="" if content.endswith("\n") else "\n")
 
 
 def main():
@@ -346,6 +519,10 @@ def main():
     submit_job_parser.add_argument("--mapper", required=True)
     submit_job_parser.add_argument("--reducer", required=True)
     submit_job_parser.set_defaults(func=submit_job)
+
+    # jobs list command
+    list_jobs_parser = jobs_subparsers.add_parser("list")
+    list_jobs_parser.set_defaults(func=list_jobs)
 
     # jobs view command
     job_status_parser = jobs_subparsers.add_parser("view")
