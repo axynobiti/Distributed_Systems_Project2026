@@ -88,7 +88,7 @@ MANAGER_ID = os.getenv(
 # The Manager uploads submitted input/mapper/reducer files here.
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "127.0.0.1:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "mapreduce")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
@@ -113,7 +113,7 @@ KUBERNETES_SCHEDULING_ENABLED = get_bool_env(
 KUBERNETES_NAMESPACE = os.getenv("KUBERNETES_NAMESPACE", "default")
 WORKER_IMAGE = os.getenv("WORKER_IMAGE", "mapreduce-worker:latest")
 WORKER_IMAGE_PULL_POLICY = os.getenv("WORKER_IMAGE_PULL_POLICY", "IfNotPresent")
-MANAGER_INTERNAL_URL = os.getenv("MANAGER_INTERNAL_URL", "http://manager:8001")
+MANAGER_INTERNAL_URL = os.getenv("MANAGER_INTERNAL_URL", "http://manager:8000")
 WORKER_SERVICE_TOKEN = os.getenv("WORKER_SERVICE_TOKEN", "")
 KUBERNETES_JOB_TTL_SECONDS = get_positive_int_env(
     "KUBERNETES_JOB_TTL_SECONDS",
@@ -957,7 +957,7 @@ def build_worker_env(job: Job, task: Task):
         "TASK_ID": str(task.task_id),
         "TASK_INDEX": str(task.task_index),
         "INPUT_PATH": task.input_path,
-        "USER_CODE_PATH": user_code_path,
+        "CODE_PATH": user_code_path,
         "OUTPUT_PATH": task.output_path or "",
         "MINIO_ENDPOINT": MINIO_ENDPOINT,
         "MINIO_BUCKET": MINIO_BUCKET,
