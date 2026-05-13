@@ -1,41 +1,36 @@
 import os
 import requests
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
 
-TOKEN_FILE = ".auth_token"
-
 app = FastAPI(title="UI Service")
 
 
 # -------------------------
-# Token helper functions
+# Token helper
 # -------------------------
 
-def save_token(token: str):
-    with open(TOKEN_FILE, "w") as file:
-        file.write(token)
+def get_bearer_token(authorization: Optional[str]):
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header."
+        )
 
+    scheme, _, token = authorization.partition(" ")
 
-def load_token():
-    if not os.path.exists(TOKEN_FILE):
-        return None
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization header must be: Bearer <token>."
+        )
 
-    with open(TOKEN_FILE, "r") as file:
-        return file.read().strip()
-
-
-def delete_token():
-    if os.path.exists(TOKEN_FILE):
-        os.remove(TOKEN_FILE)
-        return True
-
-    return False
+    return token
 
 
 # -------------------------
@@ -93,13 +88,13 @@ def login(request: LoginRequest):
         }
 
     if result.get("success"):
-        save_token(result["access_token"])
-
         return {
             "success": True,
             "message": "Login successful.",
             "username": result["username"],
-            "role": result["role"]
+            "role": result["role"],
+            "access_token": result["access_token"],
+            "token_type": result["token_type"]
         }
 
     raise HTTPException(
@@ -121,13 +116,13 @@ def set_initial_password(request: SetInitialPasswordRequest):
     result = response.json()
 
     if result.get("success"):
-        save_token(result["access_token"])
-
         return {
             "success": True,
             "message": "Password created successfully.",
             "username": result["username"],
-            "role": result["role"]
+            "role": result["role"],
+            "access_token": result["access_token"],
+            "token_type": result["token_type"]
         }
 
     raise HTTPException(
@@ -137,15 +132,8 @@ def set_initial_password(request: SetInitialPasswordRequest):
 
 
 @app.post("/validate-token")
-def validate_token():
-    token = load_token()
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="No token found. Please login first."
-        )
-
+def validate_token(authorization: Optional[str] = Header(default=None)):
+    token = get_bearer_token(authorization)
     response = requests.post(
         f"{AUTH_SERVICE_URL}/auth/validate-token",
         json={
@@ -171,30 +159,18 @@ def validate_token():
 
 @app.post("/logout")
 def logout():
-    deleted = delete_token()
-
-    if deleted:
-        return {
-            "success": True,
-            "message": "Logged out."
-        }
-
     return {
-        "success": False,
-        "message": "No active login found."
+        "success": True,
+        "message": "UI service is stateless. Delete the token on the client."
     }
 
 
 @app.post("/admin/create-user")
-def admin_create_user(request: CreateUserRequest):
-    token = load_token()
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="No token found. Please login as admin first."
-        )
-
+def admin_create_user(
+    request: CreateUserRequest,
+    authorization: Optional[str] = Header(default=None)
+):
+    token = get_bearer_token(authorization)
     response = requests.post(
         f"{AUTH_SERVICE_URL}/admin/users",
         headers={
@@ -226,15 +202,8 @@ def admin_create_user(request: CreateUserRequest):
 
 
 @app.get("/admin/list-users")
-def admin_list_users():
-    token = load_token()
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="No token found. Please login as admin first."
-        )
-
+def admin_list_users(authorization: Optional[str] = Header(default=None)):
+    token = get_bearer_token(authorization)
     response = requests.get(
         f"{AUTH_SERVICE_URL}/admin/users",
         headers={
@@ -256,15 +225,11 @@ def admin_list_users():
 
 
 @app.delete("/admin/delete-user/{username}")
-def admin_delete_user(username: str):
-    token = load_token()
-
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="No token found. Please login as admin first."
-        )
-
+def admin_delete_user(
+    username: str,
+    authorization: Optional[str] = Header(default=None)
+):
+    token = get_bearer_token(authorization)
     response = requests.delete(
         f"{AUTH_SERVICE_URL}/admin/users/{username}",
         headers={
@@ -292,14 +257,19 @@ def admin_delete_user(username: str):
 # -------------------------
 
 @app.post("/jobs")
-def submit_job():
+def submit_job(authorization: Optional[str] = Header(default=None)):
+    get_bearer_token(authorization)
     return {
         "message": "submit-job is not implemented yet."
     }
 
 
 @app.get("/jobs/{job_id}")
-def get_job_status(job_id: str):
+def get_job_status(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None)
+):
+    get_bearer_token(authorization)
     return {
         "message": "job-status is not implemented yet.",
         "job_id": job_id
@@ -307,7 +277,11 @@ def get_job_status(job_id: str):
 
 
 @app.get("/jobs/{job_id}/result")
-def get_job_result(job_id: str):
+def get_job_result(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None)
+):
+    get_bearer_token(authorization)
     return {
         "message": "job-result is not implemented yet.",
         "job_id": job_id
