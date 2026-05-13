@@ -2,34 +2,19 @@ import argparse
 import os
 import requests
 
-# Base URL of the authentication service.
-# For local testing, the FastAPI service runs on localhost port 8000.
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:8000")
 
-# Local file used to store the current user's JWT token.
-# This CLI supports one active logged-in user at a time.
+# Base URL of the UI service.
+# The CLI talks to the UI service, not directly to the auth service.
+UI_SERVICE_URL = os.getenv("UI_SERVICE_URL", "http://127.0.0.1:8001")
 TOKEN_FILE = ".auth_token"
 
 
 def save_token(token):
-    """
-    Save the JWT token locally.
-
-    The token is reused by later CLI commands so the user does not need
-    to enter their password for every request.
-    """
-
     with open(TOKEN_FILE, "w") as file:
         file.write(token)
 
 
 def load_token():
-    """
-    Load the saved JWT token.
-
-    Returns None if no user is currently logged in.
-    """
-
     if not os.path.exists(TOKEN_FILE):
         return None
 
@@ -37,16 +22,34 @@ def load_token():
         return file.read().strip()
 
 
+def delete_token():
+    if os.path.exists(TOKEN_FILE):
+        os.remove(TOKEN_FILE)
+        return True
+
+    return False
+
+
+def auth_headers():
+    token = load_token()
+
+    if not token:
+        print("No token found. Please login first.")
+        return None
+
+    return {
+        "Authorization": f"Bearer {token}"
+    }
+
+
 def login(args):
     """
-    Log in a user through the authentication service.
+    Log in a user through the UI service.
 
-    If the user has no password yet, the CLI asks them to create one
-    and then stores the returned access token.
+    The UI service talks to the auth service and returns the token.
+    The CLI stores that token locally for later requests.
     """
 
-    # Build the login request body.
-    # Password is optional because first-time users do not have one yet.
     data = {
         "username": args.username
     }
@@ -54,22 +57,19 @@ def login(args):
     if args.password:
         data["password"] = args.password
 
-    # Send login request to the authentication service.
     response = requests.post(
-        f"{AUTH_SERVICE_URL}/auth/login",
+        f"{UI_SERVICE_URL}/login",
         json=data
     )
 
     result = response.json()
 
-    # First login case: the user exists but has no password yet.
     if result.get("requires_password_setup"):
         print("First login detected.")
         new_password = input("Create password: ")
 
-        # Send the new password to the authentication service.
         setup_response = requests.post(
-            f"{AUTH_SERVICE_URL}/auth/set-initial-password",
+            f"{UI_SERVICE_URL}/set-initial-password",
             json={
                 "username": args.username,
                 "password": new_password
@@ -89,14 +89,12 @@ def login(args):
 
         return
 
-    # Existing users must provide a password.
     if result.get("requires_password"):
         print("Password required.")
         print("Use:")
         print(f"python cli.py login --username {args.username} --password <password>")
         return
 
-    # Successful login: save the token for future commands.
     if result.get("success"):
         save_token(result["access_token"])
         print("Login successful.")
@@ -109,23 +107,17 @@ def login(args):
 
 def admin_create_user(args):
     """
-    Create a new user account.
-
-    This command requires the currently logged-in user to be an admin.
-    The saved token is sent to the authentication service as a Bearer token.
+    Create a new user account through the UI service.
     """
 
-    token = load_token()
+    headers = auth_headers()
 
-    if not token:
-        print("No token found. Please login as admin first.")
+    if not headers:
         return
 
     response = requests.post(
-        f"{AUTH_SERVICE_URL}/admin/users",
-        headers={
-            "Authorization": f"Bearer {token}"
-        },
+        f"{UI_SERVICE_URL}/admin/create-user",
+        headers=headers,
         json={
             "username": args.username,
             "email": args.email,
@@ -135,7 +127,7 @@ def admin_create_user(args):
 
     result = response.json()
 
-    if response.status_code == 200:
+    if response.status_code == 200 and result.get("success"):
         print("User created successfully.")
         print("Username:", result["username"])
         print("Email:", result["email"])
@@ -148,61 +140,54 @@ def admin_create_user(args):
 
 def admin_list_users(args):
     """
-    List all users in the authentication database.
-
-    This command is admin-only and requires a valid admin token.
+    List all users through the UI service.
     """
 
-    token = load_token()
+    headers = auth_headers()
 
-    if not token:
-        print("No token found. Please login as admin first.")
+    if not headers:
         return
 
     response = requests.get(
-        f"{AUTH_SERVICE_URL}/admin/users",
-        headers={
-            "Authorization": f"Bearer {token}"
-        }
+        f"{UI_SERVICE_URL}/admin/list-users",
+        headers=headers
     )
 
     result = response.json()
 
     if response.status_code == 200:
         print("Users:")
-        for username, info in result.items():
+
+        users = result["users"]
+
+        for username, info in users.items():
             print(
                 f"- {username} | email: {info['email']} | "
                 f"role: {info['role']} | password_set: {info['password_set']}"
             )
     else:
         print("Failed to list users:")
-        print(result)     
+        print(result)
 
 
 def admin_delete_user(args):
     """
-    Delete a user account.
-
-    This command is admin-only and requires a valid admin token.
+    Delete a user account through the UI service.
     """
 
-    token = load_token()
+    headers = auth_headers()
 
-    if not token:
-        print("No token found. Please login as admin first.")
+    if not headers:
         return
 
     response = requests.delete(
-        f"{AUTH_SERVICE_URL}/admin/users/{args.username}",
-        headers={
-            "Authorization": f"Bearer {token}"
-        }
+        f"{UI_SERVICE_URL}/admin/delete-user/{args.username}",
+        headers=headers
     )
 
     result = response.json()
 
-    if response.status_code == 200:
+    if response.status_code == 200 and result.get("success"):
         print("User deleted successfully.")
         print("Username:", result["username"])
     else:
@@ -212,25 +197,22 @@ def admin_delete_user(args):
 
 def validate_token(args):
     """
-    Ask the authentication service whether the saved token is still valid.
+    Ask the UI service whether the saved token is still valid.
     """
 
-    token = load_token()
+    headers = auth_headers()
 
-    if not token:
-        print("No token found. Please login first.")
+    if not headers:
         return
 
     response = requests.post(
-        f"{AUTH_SERVICE_URL}/auth/validate-token",
-        json={
-            "token": token
-        }
+        f"{UI_SERVICE_URL}/validate-token",
+        headers=headers
     )
 
     result = response.json()
 
-    if result.get("valid"):
+    if response.status_code == 200 and result.get("valid"):
         print("Token is valid.")
         print("Username:", result["username"])
         print("Role:", result["role"])
@@ -241,17 +223,72 @@ def validate_token(args):
 
 def logout(args):
     """
-    Log out the current CLI user.
-
-    This only deletes the locally saved token. It does not delete the user
-    from the database and does not invalidate the token on the server.
+    Log out by deleting the locally saved token.
     """
-     
-    if os.path.exists(TOKEN_FILE):
-        os.remove(TOKEN_FILE)
+
+    if delete_token():
         print("Logged out.")
     else:
         print("No active login found.")
+
+
+def submit_job(args):
+    """
+    Submit a MapReduce job through the UI service.
+    """
+
+    headers = auth_headers()
+
+    if not headers:
+        return
+
+    response = requests.post(
+        f"{UI_SERVICE_URL}/jobs",
+        headers=headers,
+        json={
+            "input": args.input,
+            "mapper": args.mapper,
+            "reducer": args.reducer
+        }
+    )
+
+    print(response.json())
+
+
+def get_job_status(args):
+    """
+    Get the status/details of a MapReduce job.
+    """
+
+    headers = auth_headers()
+
+    if not headers:
+        return
+
+    response = requests.get(
+        f"{UI_SERVICE_URL}/jobs/{args.job_id}",
+        headers=headers
+    )
+
+    print(response.json())
+
+
+def get_job_result(args):
+    """
+    Get the result of a completed MapReduce job.
+    """
+
+    headers = auth_headers()
+
+    if not headers:
+        return
+
+    response = requests.get(
+        f"{UI_SERVICE_URL}/jobs/{args.job_id}/result",
+        headers=headers
+    )
+
+    print(response.json())
 
 
 def main():
@@ -299,9 +336,32 @@ def main():
     logout_parser = subparsers.add_parser("logout")
     logout_parser.set_defaults(func=logout)
 
+    # jobs command group
+    jobs_parser = subparsers.add_parser("jobs")
+    jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command")
+
+    # jobs submit command
+    submit_job_parser = jobs_subparsers.add_parser("submit")
+    submit_job_parser.add_argument("--input", required=True)
+    submit_job_parser.add_argument("--mapper", required=True)
+    submit_job_parser.add_argument("--reducer", required=True)
+    submit_job_parser.set_defaults(func=submit_job)
+
+    # jobs view command
+    job_status_parser = jobs_subparsers.add_parser("view")
+    job_status_parser.add_argument("--job-id", required=True)
+    job_status_parser.set_defaults(func=get_job_status)
+
+    # jobs retrieve result command
+    retrieve_parser = jobs_subparsers.add_parser("retrieve")
+    retrieve_subparsers = retrieve_parser.add_subparsers(dest="retrieve_command")
+
+    result_parser = retrieve_subparsers.add_parser("result")
+    result_parser.add_argument("--job-id", required=True)
+    result_parser.set_defaults(func=get_job_result)
+
     args = parser.parse_args()
 
-    # Execute the function connected to the selected command.
     if hasattr(args, "func"):
         args.func(args)
     else:
