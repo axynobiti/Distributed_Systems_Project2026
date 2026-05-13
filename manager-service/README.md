@@ -159,7 +159,7 @@ JOB_ID
 TASK_ID
 TASK_INDEX
 INPUT_PATH
-USER_CODE_PATH
+CODE_PATH
 OUTPUT_PATH
 MINIO_ENDPOINT
 MINIO_BUCKET
@@ -187,3 +187,7 @@ The reconciler keeps PostgreSQL task metadata aligned with Kubernetes:
 - failed or missing Jobs record a failed attempt
 - failed tasks with retries left are rescheduled as new Kubernetes Jobs
 - completed map phase triggers shuffle and reduce Job scheduling
+
+Before marking a task completed from Kubernetes status, the Manager verifies
+that the task's expected `OUTPUT_PATH` object exists in MinIO. If the object is
+missing, the task attempt is treated as failed and normal retry handling is used.

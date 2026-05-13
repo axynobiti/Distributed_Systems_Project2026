@@ -435,6 +435,35 @@ def download_minio_object(path: str):
         )
 
 
+def minio_object_exists(path: str):
+    """
+    Check whether an expected MinIO object exists.
+    """
+
+    bucket, object_name = parse_minio_path(path)
+
+    try:
+        minio_client.stat_object(bucket, object_name)
+        return True
+    except S3Error as exc:
+        if getattr(exc, "code", None) in [
+            "NoSuchBucket",
+            "NoSuchKey",
+            "NoSuchObject"
+        ]:
+            return False
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not check object in MinIO: {path}"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not check object in MinIO: {path}"
+        )
+
+
 def get_completed_result_objects(job: Job):
     """
     Return sorted MinIO result objects for a completed job.
@@ -1435,6 +1464,22 @@ def reconcile_kubernetes_task(db: Session, job: Job, task: Task):
         return []
 
     if kubernetes_job_succeeded(job_status):
+        if not task.output_path or not minio_object_exists(task.output_path):
+            will_retry = mark_task_failed_for_retry(
+                db,
+                job,
+                task,
+                (
+                    "Kubernetes Job succeeded but expected output object "
+                    "was not found in MinIO"
+                )
+            )
+
+            if will_retry:
+                return schedule_tasks_if_enabled(job, [task], [])
+
+            return []
+
         return mark_task_completed_from_kubernetes(db, job, task)
 
     if kubernetes_job_failed(job_status):
