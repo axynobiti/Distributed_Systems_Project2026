@@ -7,7 +7,7 @@ import re
 import threading
 import time
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -433,6 +433,61 @@ def download_minio_object(path: str):
             status_code=503,
             detail=f"Could not read object from MinIO: {path}"
         )
+
+
+def minio_object_exists(path: str):
+    """
+    Check whether an expected MinIO object exists.
+    """
+
+    bucket, object_name = parse_minio_path(path)
+
+    try:
+        minio_client.stat_object(bucket, object_name)
+        return True
+    except S3Error as exc:
+        if getattr(exc, "code", None) in [
+            "NoSuchBucket",
+            "NoSuchKey",
+            "NoSuchObject"
+        ]:
+            return False
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not check object in MinIO: {path}"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not check object in MinIO: {path}"
+        )
+
+
+def get_completed_result_objects(job: Job):
+    """
+    Return sorted MinIO result objects for a completed job.
+    """
+
+    if job.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Result is not available yet"
+        )
+
+    output_prefix = get_job_output_prefix(job)
+    result_objects = sorted(
+        list_minio_objects(output_prefix),
+        key=lambda item: item.object_name
+    )
+
+    if not result_objects:
+        raise HTTPException(
+            status_code=404,
+            detail="Result objects were not found in MinIO"
+        )
+
+    return output_prefix, result_objects
 
 
 def upload_job_file(job_id: int, uploaded_file: UploadFile, kind: str):
@@ -1409,6 +1464,22 @@ def reconcile_kubernetes_task(db: Session, job: Job, task: Task):
         return []
 
     if kubernetes_job_succeeded(job_status):
+        if not task.output_path or not minio_object_exists(task.output_path):
+            will_retry = mark_task_failed_for_retry(
+                db,
+                job,
+                task,
+                (
+                    "Kubernetes Job succeeded but expected output object "
+                    "was not found in MinIO"
+                )
+            )
+
+            if will_retry:
+                return schedule_tasks_if_enabled(job, [task], [])
+
+            return []
+
         return mark_task_completed_from_kubernetes(db, job, task)
 
     if kubernetes_job_failed(job_status):
@@ -2051,20 +2122,7 @@ def retrieve_job_result(
     job = get_job_or_404(db, job_id)
     ensure_job_access(user_info, job, "retrieve")
 
-    if job.status != "completed":
-        raise HTTPException(
-            status_code=400,
-            detail="Result is not available yet"
-        )
-
-    output_prefix = get_job_output_prefix(job)
-    result_objects = list_minio_objects(output_prefix)
-
-    if not result_objects:
-        raise HTTPException(
-            status_code=404,
-            detail="Result objects were not found in MinIO"
-        )
+    output_prefix, result_objects = get_completed_result_objects(job)
 
     return {
         "job_id": job.job_id,
@@ -2080,6 +2138,40 @@ def retrieve_job_result(
             )
         ]
     }
+
+
+@app.get("/jobs/{job_id}/result/content")
+def retrieve_job_result_content(
+    job_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve the actual text content of a completed job's reducer outputs.
+
+    The reducer output objects are downloaded from MinIO in object-name order
+    and concatenated into one plain-text response for CLI/UI display.
+    """
+
+    user_info = validate_token(credentials)
+    job = get_job_or_404(db, job_id)
+    ensure_job_access(user_info, job, "retrieve")
+
+    _, result_objects = get_completed_result_objects(job)
+    result_content = b""
+
+    for minio_object in result_objects:
+        object_content = download_minio_object(minio_object.object_name)
+
+        if result_content and not result_content.endswith(b"\n"):
+            result_content += b"\n"
+
+        result_content += object_content
+
+    return Response(
+        content=result_content,
+        media_type="text/plain"
+    )
 
 
 @app.post("/jobs/{job_id}/complete")
@@ -2112,16 +2204,45 @@ def complete_job(
             detail="Job not found"
         )
 
-    job.status = "completed"
-    job.result = request.result
-    job.completed_at = now_utc()
+    result_object_name = f"jobs/{job.job_id}/output/manual-result.txt"
+    uploaded_object = None
 
-    db.commit()
+    try:
+        ensure_minio_bucket()
+        result_path, uploaded_object = upload_bytes_object(
+            result_object_name,
+            request.result.encode("utf-8"),
+            "text/plain"
+        )
+
+        job.status = "completed"
+        job.output_path = f"jobs/{job.job_id}/output"
+        job.result = request.result
+        job.completed_at = now_utc()
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+
+        if uploaded_object:
+            cleanup_minio_objects([uploaded_object])
+
+        raise
+    except Exception:
+        db.rollback()
+
+        if uploaded_object:
+            cleanup_minio_objects([uploaded_object])
+
+        raise
+
     db.refresh(job)
 
     return {
         "success": True,
         "job_id": job.job_id,
         "status": job.status,
+        "output_path": job.output_path,
+        "result_path": result_path,
         "result": job.result
     }

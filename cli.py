@@ -5,7 +5,7 @@ import requests
 
 # Base URL of the UI service.
 # The CLI talks to the UI service, not directly to the auth service.
-UI_SERVICE_URL = os.getenv("UI_SERVICE_URL", "http://127.0.0.1:8001")
+UI_SERVICE_URL = os.getenv("UI_SERVICE_URL", "http://127.0.0.1:30080")
 TOKEN_FILE = ".auth_token"
 
 
