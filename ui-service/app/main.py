@@ -365,7 +365,7 @@ def get_job_status(
     return proxy_manager_response(response)
 
 
-@app.get("/jobs/{job_id}/result")
+@app.get("/jobs/{job_id}/result/content")
 def get_job_result(
     job_id: str,
     authorization: Optional[str] = Header(default=None)
@@ -374,7 +374,7 @@ def get_job_result(
 
     try:
         response = requests.get(
-            f"{MANAGER_SERVICE_URL}/jobs/{job_id}/result",
+            f"{MANAGER_SERVICE_URL}/jobs/{job_id}/result/content",
             headers=manager_auth_headers(token)
         )
     except requests.RequestException:
