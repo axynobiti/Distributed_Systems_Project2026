@@ -7,7 +7,7 @@ import re
 import threading
 import time
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -2168,10 +2168,11 @@ def retrieve_job_result_content(
 
         result_content += object_content
 
-    return Response(
-        content=result_content,
-        media_type="text/plain"
-    )
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "content": result_content.decode("utf-8")
+    }
 
 
 @app.post("/jobs/{job_id}/complete")
