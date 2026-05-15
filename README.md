@@ -87,6 +87,42 @@ kubectl get pods -n distributed-systems-project2026
 kubectl get svc -n distributed-systems-project2026
 ```
 
+## Redeploy after code changes
+
+For UI changes:
+
+```bash
+make redeploy-ui
+```
+
+For manager changes:
+
+```bash
+make redeploy-manager
+```
+
+For worker changes:
+
+```bash
+make rebuild-worker
+```
+
+Then submit a new job from the CLI.
+
+## Clean up
+
+Delete only this project's Kubernetes namespace:
+
+```bash
+make clean-cluster
+```
+
+Delete the whole Minikube cluster:
+
+```bash
+make minikube-delete
+```
+
 ## Use the CLI
 
 The default admin user is:
@@ -190,40 +226,4 @@ After the job status becomes `completed`, retrieve the result:
 
 ```bash
 python3 cli.py jobs retrieve result --job-id <job-id>
-```
-
-## Redeploy after code changes
-
-For UI changes:
-
-```bash
-make redeploy-ui
-```
-
-For manager changes:
-
-```bash
-make redeploy-manager
-```
-
-For worker changes:
-
-```bash
-make rebuild-worker
-```
-
-Then submit a new job from the CLI.
-
-## Clean up
-
-Delete only this project's Kubernetes namespace:
-
-```bash
-make clean-cluster
-```
-
-Delete the whole Minikube cluster:
-
-```bash
-make minikube-delete
 ```
