@@ -192,15 +192,6 @@ After the job status becomes `completed`, retrieve the result:
 python3 cli.py jobs retrieve result --job-id <job-id>
 ```
 
-Example output includes focus-word/neighbor counts such as:
-
-```text
-cat,sat 2
-dog,cat 1
-sat,cat 2
-```
-
-
 ## Redeploy after code changes
 
 For UI changes:
