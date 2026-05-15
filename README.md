@@ -2,58 +2,12 @@
 
 ## Prerequisites
 
-Install Minikube first:
-
-```bash
-curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
-rm minikube-linux-amd64
-```
-
-Verify the installation:
-
-```bash
-minikube version
-```
-
-Install Docker as the Minikube driver:
-
-```bash
-sudo apt update
-sudo apt install -y docker.io
-sudo systemctl enable --now docker
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-Start Minikube with Docker:
-
-```bash
-minikube start --driver=docker
-```
-
-Install kubectl:
-
-```bash
-sudo snap install kubectl --classic
-```
-
-Verify kubectl:
-
-```bash
-kubectl version --client
-```
-
-Connect kubectl to Minikube:
-
-```bash
-minikube status
-kubectl config use-context minikube
-```
+This project assumes Docker, Minikube, and kubectl are already installed and
+configured on the machine.
 
 ## Start the Kubernetes cluster
 
-The project can be started on Minikube with:
+Given that Docker and Minikube are installed, start the cluster with:
 
 ```bash
 make cluster-ready
@@ -138,12 +92,81 @@ For Minikube NodePort access, use:
 UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py login --username admin --password admin123
 ```
 
-If `cli.py` already points to the correct UI URL, you can run:
+If `cli.py` already points to the correct UI URL, use these commands.
+
+Log in as an existing user:
 
 ```bash
 python3 cli.py login --username admin --password admin123
+```
+
+Check that the saved login token is still valid:
+
+```bash
+python3 cli.py validate-token
+```
+
+Log out and remove the saved token:
+
+```bash
+python3 cli.py logout
+```
+
+Given that you are an admin, list all users:
+
+```bash
 python3 cli.py admin list-users
+```
+
+Given that you are an admin, create a new user:
+
+```bash
+python3 cli.py admin create-user \
+  --username alice \
+  --email alice@example.com \
+  --role user
+```
+
+Given that you are an admin, create another admin user:
+
+```bash
+python3 cli.py admin create-user \
+  --username manager \
+  --email manager@example.com \
+  --role admin
+```
+
+Given that you are an admin, delete a user:
+
+```bash
+python3 cli.py admin delete-user --username alice
+```
+
+List the MapReduce jobs visible to the current user:
+
+```bash
 python3 cli.py jobs list
+```
+
+Submit a MapReduce job:
+
+```bash
+python3 cli.py jobs submit \
+  --input <input-file> \
+  --mapper <mapper-file> \
+  --reducer <reducer-file>
+```
+
+View the status and task details of a job:
+
+```bash
+python3 cli.py jobs view --job-id <job-id>
+```
+
+Retrieve the result of a completed job:
+
+```bash
+python3 cli.py jobs retrieve result --job-id <job-id>
 ```
 
 ## How to run a MapReduce job
