@@ -1,3 +1,4 @@
+# Stores the initial admin user's credentials
 apiVersion: v1
 kind: Secret
 metadata:
@@ -5,34 +6,37 @@ metadata:
   namespace: distributed-systems-project2026
 type: Opaque
 stringData:
-  SEED_ADMIN_USERNAME: "admin"
-  SEED_ADMIN_EMAIL: "admin@example.com"
-  SEED_ADMIN_PASSWORD: "admin123"
+  SEED_ADMIN_USERNAME: "admin"              # Initial admin username
+  SEED_ADMIN_EMAIL: "admin@example.com"     # Initial admin email
+  SEED_ADMIN_PASSWORD: "admin123"           # Initial admin password
 
 ---
 
+# Runs once to create/seed the initial admin user in the Auth database
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: auth-seed-admin
   namespace: distributed-systems-project2026
 spec:
-  backoffLimit: 10
+  backoffLimit: 10                          # Retry up to 10 times if the Job fails
   template:
     metadata:
       labels:
         app: auth-seed-admin
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: OnFailure              # Restart the Pod only if it fails
       containers:
-        - name: seed-admin
-          image: ds-project/auth:latest
+        - name: seed-admin                  # One-time admin seeding container
+          image: ds-project/auth:latest     # Uses the Auth service image
           imagePullPolicy: IfNotPresent
-          command:
+          command:                          # Override normal Auth startup command
             - python
             - -m
-            - app.seed_admin
+            - app.seed_admin                # Runs the admin seed script
+
           env:
+            # Auth database connection settings
             - name: AUTH_DB_HOST
               valueFrom:
                 configMapKeyRef:
@@ -58,8 +62,12 @@ spec:
                 secretKeyRef:
                   name: auth-secret
                   key: AUTH_DB_PASSWORD
+
+            # Full database URL built from the Auth DB variables above
             - name: DATABASE_URL
               value: "postgresql://$(AUTH_DB_USER):$(AUTH_DB_PASSWORD)@$(AUTH_DB_HOST):$(AUTH_DB_PORT)/$(AUTH_DB_NAME)"
+
+            # Initial admin account values
             - name: SEED_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:

@@ -1,3 +1,4 @@
+# Stores sensitive values used by the Auth service and its database
 apiVersion: v1
 kind: Secret
 metadata:
@@ -5,24 +6,26 @@ metadata:
   namespace: distributed-systems-project2026
 type: Opaque
 stringData:
-  AUTH_SECRET_KEY: "change-this-secret-key"
-  AUTH_DB_PASSWORD: "auth_password"
+  AUTH_SECRET_KEY: "change-this-secret-key"  # JWT/signing secret for Auth
+  AUTH_DB_PASSWORD: "auth_password"          # Password for Auth PostgreSQL
 
 ---
 
+# Stores normal, non-secret Auth database configuration
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: auth-config
   namespace: distributed-systems-project2026
 data:
-  AUTH_DB_HOST: "auth-postgres"
-  AUTH_DB_PORT: "5432"
-  AUTH_DB_NAME: "auth_db"
-  AUTH_DB_USER: "auth_user"
+  AUTH_DB_HOST: "auth-postgres"  # Kubernetes Service name of the Auth database
+  AUTH_DB_PORT: "5432"           # PostgreSQL port
+  AUTH_DB_NAME: "auth_db"        # Database name
+  AUTH_DB_USER: "auth_user"      # Database user
 
 ---
 
+# Runs the Auth FastAPI app and keeps one Auth Pod alive
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,12 +42,12 @@ spec:
         app: auth
     spec:
       containers:
-        - name: auth
-          image: ds-project/auth:latest
-          imagePullPolicy: IfNotPresent
+        - name: auth                         # Auth API container
+          image: ds-project/auth:latest      # Docker image to run
+          imagePullPolicy: IfNotPresent      # Use local image if available
           ports:
-            - containerPort: 8000
-          env:
+            - containerPort: 8000            # Auth app listens here
+          env:                               # Environment variables for Auth
             - name: AUTH_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -75,49 +78,53 @@ spec:
                 secretKeyRef:
                   name: auth-secret
                   key: AUTH_DB_PASSWORD
-            - name: DATABASE_URL
+
+            - name: DATABASE_URL             # Full DB connection string for the app
               value: "postgresql://$(AUTH_DB_USER):$(AUTH_DB_PASSWORD)@$(AUTH_DB_HOST):$(AUTH_DB_PORT)/$(AUTH_DB_NAME)"
 
 ---
 
+# Gives the Auth API a stable internal address: http://auth:8000
 apiVersion: v1
 kind: Service
 metadata:
   name: auth
   namespace: distributed-systems-project2026
 spec:
-  type: ClusterIP
+  type: ClusterIP                            # Reachable only inside the cluster
   selector:
-    app: auth
+    app: auth                                # Sends traffic to Pods labeled app=auth
   ports:
-    - port: 8000
-      targetPort: 8000
+    - port: 8000                             # Service port
+      targetPort: 8000                       # Auth container port
 
 ---
 
+# Gives the Auth PostgreSQL database a stable internal address: auth-postgres:5432
 apiVersion: v1
 kind: Service
 metadata:
   name: auth-postgres
   namespace: distributed-systems-project2026
 spec:
-  type: ClusterIP
+  type: ClusterIP                            # Internal-only database access
   selector:
-    app: auth-postgres
+    app: auth-postgres                       # Sends traffic to the Postgres Pod
   ports:
-    - port: 5432
-      targetPort: 5432
+    - port: 5432                             # Service port
+      targetPort: 5432                       # PostgreSQL container port
 
 ---
 
+# Runs the Auth PostgreSQL database with persistent storage
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: auth-postgres
   namespace: distributed-systems-project2026
 spec:
-  serviceName: auth-postgres
-  replicas: 1
+  serviceName: auth-postgres                 # Service used by this StatefulSet
+  replicas: 1                                # Run one database Pod
   selector:
     matchLabels:
       app: auth-postgres
@@ -127,37 +134,38 @@ spec:
         app: auth-postgres
     spec:
       containers:
-        - name: auth-postgres
-          image: postgres:16
+        - name: auth-postgres                # PostgreSQL container
+          image: postgres:16                 # Official Postgres image
           ports:
-            - containerPort: 5432
+            - containerPort: 5432            # Postgres listens here
           env:
-            - name: POSTGRES_DB
+            - name: POSTGRES_DB              # Initial database name
               valueFrom:
                 configMapKeyRef:
                   name: auth-config
                   key: AUTH_DB_NAME
-            - name: POSTGRES_USER
+            - name: POSTGRES_USER            # Initial database user
               valueFrom:
                 configMapKeyRef:
                   name: auth-config
                   key: AUTH_DB_USER
-            - name: POSTGRES_PASSWORD
+            - name: POSTGRES_PASSWORD        # Initial database password
               valueFrom:
                 secretKeyRef:
                   name: auth-secret
                   key: AUTH_DB_PASSWORD
-            - name: PGDATA
+            - name: PGDATA                   # Data directory inside mounted volume
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
-            - name: auth-postgres-data
-              mountPath: /var/lib/postgresql/data
+            - name: auth-postgres-data       # Persistent volume name
+              mountPath: /var/lib/postgresql/data  # Where Postgres stores data
+
   volumeClaimTemplates:
     - metadata:
-        name: auth-postgres-data
+        name: auth-postgres-data             # Creates storage for each DB Pod
       spec:
         accessModes:
-          - ReadWriteOnce
+          - ReadWriteOnce                    # One node can mount it for read/write
         resources:
           requests:
-            storage: 1Gi
+            storage: 1Gi                     # Request 1Gi of persistent storage
