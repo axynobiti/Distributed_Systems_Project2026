@@ -1,18 +1,11 @@
-apiVersion: v1
-kind: Namespace
+apiVersion: apps/v1              # Deployment API version
+kind: Deployment                 # Runs/keeps Pods alive
 metadata:
-  name: distributed-systems-project2026
-
----
-
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ui
-  namespace: distributed-systems-project2026
+  name: ui                       # Object name
+  namespace: distributed-systems-project2026  # Project namespace
 spec:
-  replicas: 1
-  selector:
+  replicas: 1                    # Run 1 UI Pod
+  selector:                      # Selects Pods labeled app=ui and defines the UI Pod to run
     matchLabels:
       app: ui
   template:
@@ -21,29 +14,30 @@ spec:
         app: ui
     spec:
       containers:
-        - name: ui
-          image: ds-project/ui:latest
-          imagePullPolicy: IfNotPresent
+        - name: ui                         # Container name
+          image: ds-project/ui:latest      # Docker image to run
+          imagePullPolicy: IfNotPresent    # Use local image if available
           ports:
-            - containerPort: 8000
-          env:
-            - name: AUTH_SERVICE_URL
+            - containerPort: 8000          # Port inside the container
+          env:                             # Environment variables for the UI app
+            - name: AUTH_SERVICE_URL       # Auth service address
               value: "http://auth:8000"
-            - name: MANAGER_SERVICE_URL
+            - name: MANAGER_SERVICE_URL    # Manager service address
               value: "http://manager:8000"
 
 ---
 
+# UI Service: gives the UI Pod a stable network address and exposes it outside the cluster
 apiVersion: v1
 kind: Service
 metadata:
   name: ui
   namespace: distributed-systems-project2026
 spec:
-  type: NodePort
+  type: NodePort                    # Exposes the service outside the cluster through a node port
   selector:
-    app: ui
+    app: ui                         # Sends traffic to Pods with label app=ui
   ports:
-    - port: 8000
-      targetPort: 8000
-      nodePort: 30080
+    - port: 8000                    # Service port inside Kubernetes
+      targetPort: 8000              # Container port where the UI app is running
+      nodePort: 30080               # External port on the Kubernetes node

@@ -21,8 +21,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT configuration.
 # AUTH_SECRET_KEY can be provided from the environment.
-# The fallback value is only for local development/testing.
-SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "dev-only-secret-key")
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 5
 

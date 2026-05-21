@@ -8,8 +8,7 @@ from app.auth_routes import router as auth_router
 # Create the FastAPI application.
 app = FastAPI(title="Authentication Service")
 
-# Create database tables if they do not already exist.
-# This is useful for local development and testing.
+# Ensure the authentication database tables exist before the service handles requests.
 Base.metadata.create_all(bind=engine)
 
 # Register the admin endpoints

@@ -1,3 +1,4 @@
+# Stores the DDS/Postgres database password
 apiVersion: v1
 kind: Secret
 metadata:
@@ -5,46 +6,49 @@ metadata:
   namespace: distributed-systems-project2026
 type: Opaque
 stringData:
-  DDS_DB_PASSWORD: "dds_password"
+  DDS_DB_PASSWORD: "dds_password"  # Password for the DDS database
 
 ---
 
+# Stores normal DDS/Postgres database configuration
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: dds-postgres-config
   namespace: distributed-systems-project2026
 data:
-  DDS_DB_HOST: "dds-postgres"
-  DDS_DB_PORT: "5432"
-  DDS_DB_NAME: "dds_db"
-  DDS_DB_USER: "dds_user"
+  DDS_DB_HOST: "dds-postgres"  # Kubernetes Service name for the DDS database
+  DDS_DB_PORT: "5432"          # PostgreSQL port
+  DDS_DB_NAME: "dds_db"        # Database name
+  DDS_DB_USER: "dds_user"      # Database user
 
 ---
 
+# Gives the DDS database a stable internal address: dds-postgres:5432
 apiVersion: v1
 kind: Service
 metadata:
   name: dds-postgres
   namespace: distributed-systems-project2026
 spec:
-  type: ClusterIP
+  type: ClusterIP              # Internal-only access inside the cluster
   selector:
-    app: dds-postgres
+    app: dds-postgres          # Sends traffic to Pods labeled app=dds-postgres
   ports:
-    - port: 5432
-      targetPort: 5432
+    - port: 5432               # Service port
+      targetPort: 5432         # PostgreSQL container port
 
 ---
 
+# Runs the DDS PostgreSQL database with persistent storage
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: dds-postgres
   namespace: distributed-systems-project2026
 spec:
-  serviceName: dds-postgres
-  replicas: 1
+  serviceName: dds-postgres    # Service used by this StatefulSet
+  replicas: 1                  # Run one DDS database Pod
   selector:
     matchLabels:
       app: dds-postgres
@@ -54,37 +58,42 @@ spec:
         app: dds-postgres
     spec:
       containers:
-        - name: dds-postgres
-          image: postgres:16
+        - name: dds-postgres   # PostgreSQL container
+          image: postgres:16   # Official Postgres image
           ports:
-            - containerPort: 5432
+            - containerPort: 5432  # Postgres listens here
           env:
-            - name: POSTGRES_DB
+            - name: POSTGRES_DB    # Initial database name
               valueFrom:
                 configMapKeyRef:
                   name: dds-postgres-config
                   key: DDS_DB_NAME
-            - name: POSTGRES_USER
+
+            - name: POSTGRES_USER  # Initial database user
               valueFrom:
                 configMapKeyRef:
                   name: dds-postgres-config
                   key: DDS_DB_USER
-            - name: POSTGRES_PASSWORD
+
+            - name: POSTGRES_PASSWORD  # Initial database password
               valueFrom:
                 secretKeyRef:
                   name: dds-postgres-secret
                   key: DDS_DB_PASSWORD
-            - name: PGDATA
+
+            - name: PGDATA        # Data directory inside the mounted volume
               value: /var/lib/postgresql/data/pgdata
+
           volumeMounts:
             - name: dds-postgres-data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql/data  # Where Postgres stores data
+
   volumeClaimTemplates:
     - metadata:
-        name: dds-postgres-data
+        name: dds-postgres-data   # Persistent storage for the DDS database
       spec:
         accessModes:
-          - ReadWriteOnce
+          - ReadWriteOnce         # Mounted read/write by one node
         resources:
           requests:
-            storage: 1Gi
+            storage: 1Gi          # Request 1Gi of storage
