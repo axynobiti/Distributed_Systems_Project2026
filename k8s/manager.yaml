@@ -1,3 +1,4 @@
+# Gives the Manager Pod an identity inside Kubernetes
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -6,6 +7,7 @@ metadata:
 
 ---
 
+# Gives the Manager permission to create/read/delete worker Kubernetes Jobs
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -33,6 +35,7 @@ rules:
 
 ---
 
+# Connects the Role permissions to the Manager ServiceAccount
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -49,6 +52,7 @@ roleRef:
 
 ---
 
+# Gives the Manager a stable internal address: http://manager:8000
 apiVersion: v1
 kind: Service
 metadata:
@@ -59,11 +63,12 @@ spec:
   selector:
     app: manager
   ports:
-    - port: 8000
-      targetPort: 8000
+    - port: 8000              # Service port
+      targetPort: 8000        # Manager container port
 
 ---
 
+# Headless Service used by the Manager StatefulSet for stable Pod identity
 apiVersion: v1
 kind: Service
 metadata:
@@ -74,11 +79,12 @@ spec:
   selector:
     app: manager
   ports:
-    - port: 8000
-      targetPort: 8000
+    - port: 8000              # Service port
+      targetPort: 8000        # Manager container port
 
 ---
 
+# Runs the Manager service Pods
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -86,7 +92,7 @@ metadata:
   namespace: distributed-systems-project2026
 spec:
   serviceName: manager-headless
-  replicas: 2
+  replicas: 2                 # Runs 2 Manager Pods
   selector:
     matchLabels:
       app: manager
@@ -95,14 +101,15 @@ spec:
       labels:
         app: manager
     spec:
-      serviceAccountName: manager
+      serviceAccountName: manager  # Uses permissions from the ServiceAccount/Role/RoleBinding
       containers:
         - name: manager
           image: ds-project/manager:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8000
+            - containerPort: 8000  # Manager app listens here
           env:
+            # DDS/Postgres connection settings
             - name: DDS_DB_HOST
               valueFrom:
                 configMapKeyRef:
@@ -128,10 +135,16 @@ spec:
                 secretKeyRef:
                   name: dds-postgres-secret
                   key: DDS_DB_PASSWORD
+
+            # Full database URL built from the DDS variables above
             - name: DATABASE_URL
               value: "postgresql://$(DDS_DB_USER):$(DDS_DB_PASSWORD)@$(DDS_DB_HOST):$(DDS_DB_PORT)/$(DDS_DB_NAME)"
+
+            # Internal address of the Auth service
             - name: AUTH_SERVICE_URL
               value: "http://auth:8000"
+
+            # MinIO connection settings
             - name: MINIO_ENDPOINT
               value: "minio:9000"
             - name: MINIO_ACCESS_KEY
@@ -148,15 +161,21 @@ spec:
               value: "mapreduce"
             - name: MINIO_SECURE
               value: "false"
+
+            # Kubernetes worker scheduling settings
             - name: KUBERNETES_NAMESPACE
               value: "distributed-systems-project2026"
             - name: KUBERNETES_SCHEDULING_ENABLED
               value: "true"
             - name: KUBERNETES_RECONCILE_ENABLED
               value: "true"
+
+            # Worker image used when Manager creates mapper/reducer Jobs
             - name: WORKER_IMAGE
               value: "ds-project/worker:latest"
             - name: WORKER_IMAGE_PULL_POLICY
               value: "IfNotPresent"
+
+            # Manager's internal cluster URL
             - name: MANAGER_INTERNAL_URL
               value: "http://manager:8000"

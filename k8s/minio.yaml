@@ -1,3 +1,4 @@
+# Stores MinIO login credentials
 apiVersion: v1
 kind: Secret
 metadata:
@@ -5,19 +6,20 @@ metadata:
   namespace: distributed-systems-project2026
 type: Opaque
 stringData:
-  MINIO_ROOT_USER: "minioadmin"
-  MINIO_ROOT_PASSWORD: "minioadmin123"
+  MINIO_ROOT_USER: "minioadmin"          # MinIO username
+  MINIO_ROOT_PASSWORD: "minioadmin123"   # MinIO password
 
 ---
 
+# Runs the MinIO storage server with persistent storage
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: minio
   namespace: distributed-systems-project2026
 spec:
-  serviceName: minio
-  replicas: 1
+  serviceName: minio                    # Service used by this StatefulSet
+  replicas: 1                           # Run one MinIO Pod
   selector:
     matchLabels:
       app: minio
@@ -27,58 +29,62 @@ spec:
         app: minio
     spec:
       containers:
-        - name: minio
-          image: minio/minio:latest
+        - name: minio                   # MinIO container
+          image: minio/minio:latest     # Official MinIO image
           imagePullPolicy: IfNotPresent
-          args:
-            - server
-            - /data
+          args:                         # Command arguments for MinIO
+            - server                    # Start MinIO server
+            - /data                     # Store files under /data
             - --console-address
-            - ":9001"
+            - ":9001"                   # Web console port
           ports:
             - name: api
-              containerPort: 9000
+              containerPort: 9000       # S3/API port
             - name: console
-              containerPort: 9001
+              containerPort: 9001       # Browser console port
           env:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
                   name: minio-secret
                   key: MINIO_ROOT_USER
+
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: minio-secret
                   key: MINIO_ROOT_PASSWORD
+
           volumeMounts:
             - name: minio-storage
-              mountPath: /data
+              mountPath: /data          # Where MinIO stores uploaded files
+
   volumeClaimTemplates:
     - metadata:
-        name: minio-storage
+        name: minio-storage             # Persistent storage for MinIO
       spec:
         accessModes:
-          - ReadWriteOnce
+          - ReadWriteOnce               # Mounted read/write by one node
         resources:
           requests:
-            storage: 2Gi
+            storage: 2Gi                # Request 2Gi of storage
 
 ---
 
+# Gives MinIO a stable internal address: minio:9000 and minio:9001
 apiVersion: v1
 kind: Service
 metadata:
   name: minio
   namespace: distributed-systems-project2026
 spec:
-  type: ClusterIP
+  type: ClusterIP                       # Internal-only access inside the cluster
   selector:
-    app: minio
+    app: minio                          # Sends traffic to Pods labeled app=minio
   ports:
     - name: api
-      port: 9000
-      targetPort: 9000
+      port: 9000                        # Service port for MinIO API
+      targetPort: 9000                  # MinIO container API port
     - name: console
-      port: 9001
-      targetPort: 9001
+      port: 9001                        # Service port for MinIO console
+      targetPort: 9001                  # MinIO container console port

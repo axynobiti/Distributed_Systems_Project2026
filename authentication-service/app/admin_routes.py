@@ -20,7 +20,7 @@ class UserCreate(BaseModel):
 def create_user(
     user: UserCreate,
     db: Session = Depends(get_db),
-    admin_user: User = Depends(require_admin)
+    admin_user: User = Depends(require_admin)  # Runs admin check before creating user.
 ):
     """
     Create a new user account.
@@ -86,7 +86,7 @@ def create_user(
 def delete_user(
     username: str,
     db: Session = Depends(get_db),
-    admin_user: User = Depends(require_admin)
+    admin_user: User = Depends(require_admin)  # Runs admin check before attempting user deletion.
 ):
     """
     Delete an existing user account.
@@ -124,7 +124,7 @@ def delete_user(
 @router.get("/admin/users")
 def list_users(
     db: Session = Depends(get_db),
-    admin_user: User = Depends(require_admin)
+    admin_user: User = Depends(require_admin)  # Runs admin check before listing users.
 ):
     """
     Return all users in the system.
