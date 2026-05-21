@@ -22,12 +22,6 @@ This command:
 - seeds the default admin user
 - waits until the cluster is ready
 
-To use a custom image tag:
-
-```bash
-make cluster-ready TAG=v1
-```
-
 ## Check the deployment
 
 ```bash
