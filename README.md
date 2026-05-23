@@ -86,36 +86,36 @@ For Minikube NodePort access, use:
 UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py login --username admin --password admin123
 ```
 
-If `cli.py` already points to the correct UI URL, use these commands.
+Use the same UI service URL prefix for the CLI commands below.
 
 Log in as an existing user:
 
 ```bash
-python3 cli.py login --username admin --password admin123
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py login --username admin --password admin123
 ```
 
 Check that the saved login token is still valid:
 
 ```bash
-python3 cli.py validate-token
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py validate-token
 ```
 
 Log out and remove the saved token:
 
 ```bash
-python3 cli.py logout
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py logout
 ```
 
 Given that you are an admin, list all users:
 
 ```bash
-python3 cli.py admin list-users
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py admin list-users
 ```
 
 Given that you are an admin, create a new user:
 
 ```bash
-python3 cli.py admin create-user \
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py admin create-user \
   --username alice \
   --email alice@example.com \
   --role user
@@ -124,7 +124,7 @@ python3 cli.py admin create-user \
 Given that you are an admin, create another admin user:
 
 ```bash
-python3 cli.py admin create-user \
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py admin create-user \
   --username manager \
   --email manager@example.com \
   --role admin
@@ -133,19 +133,19 @@ python3 cli.py admin create-user \
 Given that you are an admin, delete a user:
 
 ```bash
-python3 cli.py admin delete-user --username alice
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py admin delete-user --username alice
 ```
 
 List the MapReduce jobs visible to the current user:
 
 ```bash
-python3 cli.py jobs list
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs list
 ```
 
 Submit a MapReduce job:
 
 ```bash
-python3 cli.py jobs submit \
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs submit \
   --input <input-file> \
   --mapper <mapper-file> \
   --reducer <reducer-file>
@@ -154,13 +154,13 @@ python3 cli.py jobs submit \
 View the status and task details of a job:
 
 ```bash
-python3 cli.py jobs view --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs view --job-id <job-id>
 ```
 
 Retrieve the result of a completed job:
 
 ```bash
-python3 cli.py jobs retrieve result --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs retrieve result --job-id <job-id>
 ```
 
 ## How to run a MapReduce job
@@ -196,7 +196,7 @@ test-files/WordCount/wordcount_reducer.py
 Submit the job:
 
 ```bash
-python3 cli.py jobs submit \
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs submit \
   --input test-files/WordCount/wordcount_input.txt \
   --mapper test-files/WordCount/wordcount_mapper.py \
   --reducer test-files/WordCount/wordcount_reducer.py
@@ -205,13 +205,13 @@ python3 cli.py jobs submit \
 Use the returned job id to check status:
 
 ```bash
-python3 cli.py jobs view --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs view --job-id <job-id>
 ```
 
 After the job status becomes `completed`, retrieve the result:
 
 ```bash
-python3 cli.py jobs retrieve result --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs retrieve result --job-id <job-id>
 ```
 
 ### 3. Run WordCo-occurrence
@@ -227,7 +227,7 @@ test-files/WordCo-occurrence/reducer.py
 Submit the job:
 
 ```bash
-python3 cli.py jobs submit \
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs submit \
   --input test-files/WordCo-occurrence/input.txt \
   --mapper test-files/WordCo-occurrence/mapper.py \
   --reducer test-files/WordCo-occurrence/reducer.py
@@ -236,11 +236,11 @@ python3 cli.py jobs submit \
 Use the returned job id to check status:
 
 ```bash
-python3 cli.py jobs view --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs view --job-id <job-id>
 ```
 
 After the job status becomes `completed`, retrieve the result:
 
 ```bash
-python3 cli.py jobs retrieve result --job-id <job-id>
+UI_SERVICE_URL=http://$(minikube ip):30080 python3 cli.py jobs retrieve result --job-id <job-id>
 ```
